@@ -1,0 +1,16 @@
+.gradle/
+.idea/
+.vscode/
+build/
+/run/
+/build-tools/
+/native-build/
+/dist/
+*.log
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.pem
+*.key

@@ -1,0 +1,287 @@
+package crewx;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import crewx.accountmanager.AccountManager;
+import crewx.command.CommandManager;
+import crewx.command.commands.*;
+import crewx.cosmetics.CosmeticRenderHandler;
+import crewx.config.Config;
+import crewx.event.EventManager;
+import crewx.management.*;
+import crewx.module.Module;
+import crewx.module.ModuleManager;
+import crewx.module.modules.combat.*;
+import crewx.module.modules.movement.*;
+import crewx.module.modules.render.*;
+import crewx.module.modules.player.*;
+import crewx.module.modules.misc.*;
+import crewx.property.Property;
+import crewx.property.PropertyManager;
+import crewx.util.DiscordRPC;
+
+import java.io.InputStreamReader;
+import java.io.File;
+import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Objects;
+import org.lwjgl.input.Keyboard;
+
+public class CrewX {
+    public static volatile boolean initializationComplete;
+    public static volatile boolean unloaded;
+    private static volatile boolean shutdownHookRegistered;
+    public static String clientName = "&7[&bCrewX&7]&r ";
+    public static String version;
+    public static RotationManager rotationManager;
+    public static FloatManager floatManager;
+    public static BlinkManager blinkManager;
+    public static DelayManager delayManager;
+    public static LagManager lagManager;
+    public static PlayerStateManager playerStateManager;
+    public static FriendManager friendManager;
+    public static TargetManager targetManager;
+    public static PropertyManager propertyManager;
+    public static crewx.script.ScriptManager scriptManager;
+    public static ModuleManager moduleManager;
+    public static CommandManager commandManager;
+    public static DiscordRPC discordRPC;
+
+    public CrewX() {
+        this.init();
+    }
+
+    public void init() {
+        rotationManager = new RotationManager();
+        floatManager = new FloatManager();
+        blinkManager = new BlinkManager();
+        delayManager = new DelayManager();
+        lagManager = new LagManager();
+        playerStateManager = new PlayerStateManager();
+        friendManager = new FriendManager();
+        targetManager = new TargetManager();
+        propertyManager = new PropertyManager();
+        moduleManager = new ModuleManager();
+        commandManager = new CommandManager();
+        EventManager.register(rotationManager);
+        EventManager.register(floatManager);
+        EventManager.register(blinkManager);
+        EventManager.register(delayManager);
+        EventManager.register(lagManager);
+        EventManager.register(moduleManager);
+        EventManager.register(commandManager);
+        discordRPC = new DiscordRPC();
+        moduleManager.modules.put(AimAssist.class, new AimAssist());
+        moduleManager.modules.put(ProjectileAimbot.class, new ProjectileAimbot());
+        moduleManager.modules.put(Backtrack.class, new Backtrack());
+        moduleManager.modules.put(Overlay.class, new Overlay());
+        moduleManager.modules.put(DiscordRPC.class, discordRPC);
+        moduleManager.modules.put(Fakelag.class, new Fakelag());
+        moduleManager.modules.put(AntiAFK.class, new AntiAFK());
+        moduleManager.modules.put(AntiDebuff.class, new AntiDebuff());
+        moduleManager.modules.put(AntiFireball.class, new AntiFireball());
+        moduleManager.modules.put(AntiObbyTrap.class, new AntiObbyTrap());
+        moduleManager.modules.put(AntiObfuscate.class, new AntiObfuscate());
+        moduleManager.modules.put(AntiVoid.class, new AntiVoid());
+        moduleManager.modules.put(AutoClicker.class, new AutoClicker());
+        moduleManager.modules.put(AutoAnduril.class, new AutoAnduril());
+        moduleManager.modules.put(AutoTool.class, new AutoTool());
+        moduleManager.modules.put(AutoRecraft.class, new AutoRecraft());
+        moduleManager.modules.put(AutoRefill.class, new AutoRefill());
+        moduleManager.modules.put(AutoPot.class, new AutoPot());
+        moduleManager.modules.put(ThrowPot.class, new ThrowPot());
+        moduleManager.modules.put(SprintReset.class, new SprintReset());
+        moduleManager.modules.put(DynamicIsland.class, new DynamicIsland());
+        moduleManager.modules.put(Piercing.class, new Piercing());
+        moduleManager.modules.put(AntiCheat.class, new AntiCheat());
+        moduleManager.modules.put(AutoSoup.class, new AutoSoup());
+        moduleManager.modules.put(SoupHotkey.class, new SoupHotkey());
+        moduleManager.modules.put(BedNuker.class, new BedNuker());
+        moduleManager.modules.put(BedESP.class, new BedESP());
+        moduleManager.modules.put(BedTracker.class, new BedTracker());
+        moduleManager.modules.put(Blink.class, new Blink());
+        moduleManager.modules.put(Chams.class, new Chams());
+        moduleManager.modules.put(ChestESP.class, new ChestESP());
+        moduleManager.modules.put(ChestStealer.class, new ChestStealer());
+        moduleManager.modules.put(BridgeAssist.class, new BridgeAssist());
+        moduleManager.modules.put(KnockbackDelay.class, new KnockbackDelay());
+        moduleManager.modules.put(BlockHit.class, new BlockHit());
+        moduleManager.modules.put(AutoHeadHitter.class, new AutoHeadHitter());
+        moduleManager.modules.put(BedDefender.class, new BedDefender());
+        moduleManager.modules.put(Displace.class, new Displace());
+        moduleManager.modules.put(Notifications.class, new Notifications());
+        moduleManager.modules.put(ESP.class, new ESP());
+        moduleManager.modules.put(FastPlace.class, new FastPlace());
+        moduleManager.modules.put(Freeze.class, new Freeze());
+        moduleManager.modules.put(Fly.class, new Fly());
+        moduleManager.modules.put(FullBright.class, new FullBright());
+        moduleManager.modules.put(MotionBlur.class, new MotionBlur());
+        moduleManager.modules.put(GhostHand.class, new GhostHand());
+        moduleManager.modules.put(MediaPlayer.class, new MediaPlayer());
+        moduleManager.modules.put(GuiModule.class, new GuiModule());
+        moduleManager.modules.put(HitSelect.class, new HitSelect());
+        moduleManager.modules.put(HUD.class, new HUD());
+        moduleManager.modules.put(MoreKB.class, new MoreKB());
+        moduleManager.modules.put(Indicators.class, new Indicators());
+        moduleManager.modules.put(InventoryClicker.class, new InventoryClicker());
+        moduleManager.modules.put(InvManager.class, new InvManager());
+        moduleManager.modules.put(InvWalk.class, new InvWalk());
+        moduleManager.modules.put(ItemESP.class, new ItemESP());
+        moduleManager.modules.put(Jesus.class, new Jesus());
+        moduleManager.modules.put(KeepSprint.class, new KeepSprint());
+        moduleManager.modules.put(HitBox.class, new HitBox());
+        moduleManager.modules.put(KillAura.class, new KillAura());
+        moduleManager.modules.put(Criticals.class, new Criticals());
+        moduleManager.modules.put(BowAimbot.class, new BowAimbot());
+        moduleManager.modules.put(LagRange.class, new LagRange());
+        moduleManager.modules.put(LongJump.class, new LongJump());
+        moduleManager.modules.put(MCF.class, new MCF());
+        moduleManager.modules.put(NameTags.class, new NameTags());
+        moduleManager.modules.put(NickHider.class, new NickHider());
+        moduleManager.modules.put(NoFall.class, new NoFall());
+        moduleManager.modules.put(NoHitDelay.class, new NoHitDelay());
+        moduleManager.modules.put(NoHurtCam.class, new NoHurtCam());
+        moduleManager.modules.put(NoJumpDelay.class, new NoJumpDelay());
+        moduleManager.modules.put(NoRotate.class, new NoRotate());
+        moduleManager.modules.put(NoSlow.class, new NoSlow());
+        moduleManager.modules.put(Radar.class, new Radar());
+        moduleManager.modules.put(Reach.class, new Reach());
+        moduleManager.modules.put(SafeWalk.class, new SafeWalk());
+        moduleManager.modules.put(Scaffold.class, new Scaffold());
+        moduleManager.modules.put(AutoBlockIn.class, new AutoBlockIn());
+        moduleManager.modules.put(Spammer.class, new Spammer());
+        moduleManager.modules.put(Speed.class, new Speed());
+        moduleManager.modules.put(SpeedMine.class, new SpeedMine());
+        moduleManager.modules.put(Sprint.class, new Sprint());
+        moduleManager.modules.put(TargetHUD.class, new TargetHUD());
+        moduleManager.modules.put(TargetStrafe.class, new TargetStrafe());
+        moduleManager.modules.put(Tracers.class, new Tracers());
+        moduleManager.modules.put(Trajectories.class, new Trajectories());
+        moduleManager.modules.put(Velocity.class, new Velocity());
+        moduleManager.modules.put(ViewClip.class, new ViewClip());
+        moduleManager.modules.put(Wtap.class, new Wtap());
+        moduleManager.modules.put(Xray.class, new Xray());
+        moduleManager.modules.put(Insults.class, new Insults());
+        moduleManager.modules.put(AutoChest.class, new AutoChest());
+        moduleManager.modules.put(Accessories.class, new Accessories());
+        moduleManager.modules.put(AntiBot.class, new AntiBot());
+        moduleManager.modules.put(Animations.class, new Animations());
+        moduleManager.modules.put(StaffDetector.class, new StaffDetector());
+        moduleManager.modules.put(TickBase.class, new TickBase());
+        moduleManager.modules.put(RodAimbot.class, new RodAimbot());
+        moduleManager.modules.put(RemoteShop.class, new RemoteShop());
+        moduleManager.modules.put(AutoRegister.class, new AutoRegister());
+        moduleManager.modules.put(FreeLook.class, new FreeLook());
+        moduleManager.modules.put(Spotify.class, new Spotify());
+        moduleManager.modules.put(Freecam.class, new Freecam());
+        moduleManager.modules.put(ChatCustomization.class, new ChatCustomization());
+        commandManager.commands.add(new BindCommand());
+        commandManager.commands.add(new ConfigCommand());
+        commandManager.commands.add(new DenickCommand());
+        commandManager.commands.add(new FriendCommand());
+        commandManager.commands.add(new HelpCommand());
+        commandManager.commands.add(new HideCommand());
+        commandManager.commands.add(new IgnCommand());
+        commandManager.commands.add(new ItemCommand());
+        commandManager.commands.add(new ListCommand());
+        commandManager.commands.add(new ModuleCommand());
+        commandManager.commands.add(new PlayerCommand());
+        commandManager.commands.add(new ScriptCommand());
+        commandManager.commands.add(new SpotifyCommand());
+        commandManager.commands.add(new ShowCommand());
+        commandManager.commands.add(new TargetCommand());
+        commandManager.commands.add(new ToggleCommand());
+        commandManager.commands.add(new crewx.command.commands.HitchesCommand());
+        commandManager.commands.add(new VclipCommand());
+        for (Module module : moduleManager.modules.values()) {
+            ArrayList<Property<?>> properties = new ArrayList<>();
+            for (final Field field : module.getClass().getDeclaredFields()) {
+                field.setAccessible(true);
+                final Object obj;
+                try {
+                    obj = field.get(module);
+                } catch (IllegalAccessException e) {
+                    throw new RuntimeException(e);
+                }
+                if (obj instanceof Property<?>) {
+                    ((Property<?>) obj).setOwner(module);
+                    properties.add((Property<?>) obj);
+                }
+            }
+            propertyManager.properties.put(module, properties);
+            EventManager.register(module);
+        }
+        CosmeticRenderHandler.register();
+        scriptManager = new crewx.script.ScriptManager();
+        scriptManager.init();
+
+        Config config = new Config(Config.activeName(), false);
+        if (config.file.exists()) {
+            File defaultsMarker = new File(config.file.getParentFile(), ".module-defaults-v1");
+            // Existing injectable installations already have user-selected module states.
+            // The upstream migration is only appropriate for an untouched default config.
+            boolean resetOldToggleStates = !defaultsMarker.exists()
+                    && "default".equals(config.name)
+                    && !new File(config.file.getParentFile(), ".active-config").exists();
+            if (config.load(resetOldToggleStates) && resetOldToggleStates) {
+                try {
+                    if (defaultsMarker.createNewFile()) config.save();
+                } catch (Exception ignored) {
+                }
+            }
+            File insertBindMarker = new File(config.file.getParentFile(), ".crewx_insert_bind_v1");
+            if (!insertBindMarker.exists()) {
+                GuiModule guiModule = (GuiModule) moduleManager.modules.get(GuiModule.class);
+                if (guiModule != null && guiModule.getKey() == Keyboard.KEY_RSHIFT) {
+                    guiModule.setKey(Keyboard.KEY_INSERT);
+                    config.save();
+                }
+                try { insertBindMarker.createNewFile(); } catch (Exception ignored) {}
+            }
+        }
+        if (discordRPC.isEnabled()) {
+            Thread discordStartup = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    discordRPC.start();
+                }
+            }, "CrewX Discord RPC Startup");
+            discordStartup.setDaemon(true);
+            discordStartup.start();
+        }
+        if (friendManager.file.exists()) {
+            friendManager.load();
+        }
+        if (targetManager.file.exists()) {
+            targetManager.load();
+        }
+        if (!shutdownHookRegistered) {
+            shutdownHookRegistered = true;
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                if (!unloaded) new Config(Config.lastConfig, false).save();
+                if (discordRPC != null) discordRPC.shutdown();
+            }));
+        }
+
+        try (InputStreamReader reader = new InputStreamReader(Objects.requireNonNull(CrewX.class.getResourceAsStream("/version.json")), StandardCharsets.UTF_8)) {
+            JsonObject modInfo = new JsonParser().parse(reader).getAsJsonObject();
+            version = modInfo.get("version").getAsString();
+                } catch (Exception e) {
+            version = "dev";
+        }
+
+        AccountManager.init();
+        // menu space background: decode its textures in the background now, free them while playing
+        EventManager.register(new crewx.gui.menu.MenuResources());
+        crewx.gui.menu.SpaceBackground.preload();
+        initializationComplete = true;
+    }
+
+
+    public static int getCategoryForModule(Module module) {
+        return moduleManager == null || module == null
+                ? crewx.module.ModuleCategory.MISC.ordinal()
+                : moduleManager.getCategory(module).ordinal();
+    }
+}

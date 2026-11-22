@@ -1,0 +1,206 @@
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
+import java.util.jar.JarOutputStream;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.LdcInsnNode;
+import org.objectweb.asm.tree.MethodInsnNode;
+import org.objectweb.asm.tree.MethodNode;
+
+
+public final class AccessorRewriter {
+    private static final String ACCESSOR = "crewx/mixin/IAccessor";
+    private static final String BRIDGE = "crewx/inject/CrewXAccessors";
+    private static int rewrittenCalls;
+    private static final Set<String> methods = new HashSet<String>();
+    private static final Set<String> bridgeMethods = new HashSet<String>();
+
+    public static void main(String[] args) throws Exception {
+        if (args.length != 2) throw new IllegalArgumentException("input.jar output.jar");
+        File input = new File(args[0]);
+        File output = new File(args[1]);
+        if (input.getCanonicalPath().equals(output.getCanonicalPath())) {
+            throw new IllegalArgumentException("Input and output must differ");
+        }
+        try (JarFile jar = new JarFile(input);
+             JarOutputStream out = new JarOutputStream(new FileOutputStream(output))) {
+            JarEntry bridge = jar.getJarEntry(BRIDGE + ".class");
+            if (bridge == null) throw new IllegalStateException("Missing accessor bridge");
+            try (InputStream stream = jar.getInputStream(bridge)) {
+                new ClassReader(readAll(stream)).accept(new ClassVisitor(Opcodes.ASM9) {
+                    @Override public MethodVisitor visitMethod(int access, String name, String desc,
+                                                                String signature, String[] exceptions) {
+                        if ((access & Opcodes.ACC_STATIC) != 0) bridgeMethods.add(name + desc);
+                        return null;
+                    }
+                }, ClassReader.SKIP_CODE);
+            }
+            Enumeration<JarEntry> entries = jar.entries();
+            while (entries.hasMoreElements()) {
+                JarEntry entry = entries.nextElement();
+                byte[] bytes;
+                try (InputStream stream = jar.getInputStream(entry)) {
+                    bytes = readAll(stream);
+                }
+                if ((entry.getName().startsWith("crewx/")
+                        || entry.getName().equals("net/montoyo/mcef/client/ClientProxy.class"))
+                        && entry.getName().endsWith(".class")) {
+                    bytes = rewrite(bytes);
+                    if (entry.getName().equals("net/montoyo/mcef/client/ClientProxy.class")) {
+                        bytes = removeLegacyLibraryPathHack(bytes);
+                    }
+                }
+                JarEntry copy = new JarEntry(entry.getName());
+                copy.setTime(entry.getTime());
+                out.putNextEntry(copy);
+                out.write(bytes);
+                out.closeEntry();
+            }
+        }
+        if (rewrittenCalls == 0) throw new IllegalStateException("No accessor calls rewritten");
+        Set<String> missing = new HashSet<String>(methods);
+        missing.removeAll(bridgeMethods);
+        if (!missing.isEmpty()) throw new IllegalStateException("Missing bridge methods: " + missing);
+        System.out.println("Rewrote " + rewrittenCalls + " accessor calls across "
+                + methods.size() + " bridge methods");
+    }
+
+    private static byte[] readAll(InputStream stream) throws Exception {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        for (int n; (n = stream.read(buffer)) != -1;) bytes.write(buffer, 0, n);
+        return bytes.toByteArray();
+    }
+
+    private static byte[] rewrite(byte[] bytes) {
+        ClassReader reader = new ClassReader(bytes);
+        ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS);
+        reader.accept(new ClassVisitor(Opcodes.ASM9, writer) {
+            @Override public MethodVisitor visitMethod(int access, String name, String desc,
+                                                        String signature, String[] exceptions) {
+                MethodVisitor output = super.visitMethod(access, name, desc, signature, exceptions);
+                if (output == null) return null;
+                return new MethodVisitor(Opcodes.ASM9, output) {
+                    @Override public void visitTypeInsn(int opcode, String type) {
+                        if (opcode == Opcodes.CHECKCAST && type.startsWith(ACCESSOR)) return;
+                        super.visitTypeInsn(opcode, type);
+                    }
+                    @Override public void visitFieldInsn(int opcode, String owner, String field, String descriptor) {
+                        if (opcode == Opcodes.GETSTATIC && owner.equals("net/minecraftforge/common/MinecraftForge")
+                                && field.equals("EVENT_BUS")) {
+                            super.visitInsn(Opcodes.ACONST_NULL);
+                            return;
+                        }
+                        if (opcode == Opcodes.PUTSTATIC && owner.equals("net/minecraftforge/common/ForgeModContainer")
+                                && field.equals("forgeLightPipelineEnabled") && descriptor.equals("Z")) {
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, "crewx/inject/ForgeCompat", "setLightPipeline", "(Z)V", false);
+                            return;
+                        }
+                        super.visitFieldInsn(opcode, owner, field, descriptor);
+                    }
+                    @Override public void visitMethodInsn(int opcode, String owner, String method,
+                                                           String descriptor, boolean isInterface) {
+                        if (owner.equals("net/minecraftforge/fml/common/eventhandler/EventBus")
+                                && method.equals("register")) {
+                            super.visitInsn(Opcodes.POP2);
+                            return;
+                        }
+                        if (owner.equals("net/montoyo/mcef/coremod/ShutdownPatcher")
+                                && method.equals("didPatchSucceed")) {
+                            super.visitInsn(Opcodes.ICONST_1);
+                            return;
+                        }
+                        if (opcode == Opcodes.INVOKESTATIC
+                                && owner.equals("crewx/accountmanager/ForgeBinding")
+                                && method.equals("register") && descriptor.equals("()V")) {
+                            super.visitMethodInsn(opcode, "crewx/inject/ForgeCompat", "registerAccountEvents", descriptor, false);
+                            return;
+                        }
+                        if (opcode == Opcodes.INVOKESTATIC
+                                && owner.equals("net/minecraftforge/common/ForgeHooks")
+                                && method.equals("onPlayerAttackTarget")) {
+                            super.visitMethodInsn(opcode, "crewx/inject/ForgeCompat", "allowPlayerAttack", descriptor, false);
+                            return;
+                        }
+                        if (opcode != Opcodes.INVOKEINTERFACE || !owner.startsWith(ACCESSOR)) {
+                            super.visitMethodInsn(opcode, owner, method, descriptor, isInterface);
+                            return;
+                        }
+                        Type originalReturn = Type.getReturnType(descriptor);
+                        Type bridgeReturn = originalReturn.getSort() == Type.OBJECT
+                                || originalReturn.getSort() == Type.ARRAY
+                                ? Type.getType(Object.class) : originalReturn;
+                        Type[] parameters = Type.getArgumentTypes(descriptor);
+                        Type[] bridgeParameters = new Type[parameters.length + 1];
+                        bridgeParameters[0] = Type.getType(Object.class);
+                        for (int i = 0; i < parameters.length; i++) {
+                            int sort = parameters[i].getSort();
+                            bridgeParameters[i + 1] = sort == Type.OBJECT || sort == Type.ARRAY
+                                    ? Type.getType(Object.class) : parameters[i];
+                        }
+                        String bridgeDescriptor = Type.getMethodDescriptor(bridgeReturn, bridgeParameters);
+                        super.visitMethodInsn(Opcodes.INVOKESTATIC, BRIDGE, method,
+                                bridgeDescriptor, false);
+                        if (bridgeReturn != originalReturn) {
+                            super.visitTypeInsn(Opcodes.CHECKCAST, originalReturn.getInternalName());
+                        }
+                        rewrittenCalls++;
+                        methods.add(method + bridgeDescriptor);
+                    }
+                };
+            }
+        }, 0);
+        return writer.toByteArray();
+    }
+
+    /** Java 17 has no ClassLoader.usr_paths. The library is loaded by absolute path below. */
+    private static byte[] removeLegacyLibraryPathHack(byte[] bytes) {
+        ClassNode node = new ClassNode(Opcodes.ASM9);
+        new ClassReader(bytes).accept(node, 0);
+        for (MethodNode method : node.methods) {
+            if (!method.name.equals("onInit") || !method.desc.equals("()V")) continue;
+            AbstractInsnNode first = null;
+            AbstractInsnNode next = null;
+            for (AbstractInsnNode insn = method.instructions.getFirst(); insn != null; insn = insn.getNext()) {
+                if (first == null && insn instanceof LdcInsnNode
+                        && "Now adding \"%s\" to java.library.path".equals(((LdcInsnNode) insn).cst)) {
+                    first = insn;
+                } else if (first != null && insn instanceof MethodInsnNode) {
+                    MethodInsnNode call = (MethodInsnNode) insn;
+                    if (call.owner.equals("org/cef/OS") && call.name.equals("isLinux")) {
+                        next = insn;
+                        break;
+                    }
+                }
+            }
+            if (first == null || next == null) throw new IllegalStateException("MCEF library path sequence changed");
+            Set<AbstractInsnNode> removed = new HashSet<>();
+            for (AbstractInsnNode insn = first; insn != next; insn = insn.getNext()) removed.add(insn);
+            method.tryCatchBlocks.removeIf(block -> removed.contains(block.start)
+                    || removed.contains(block.end) || removed.contains(block.handler));
+            if (method.localVariables != null) method.localVariables.removeIf(local ->
+                    removed.contains(local.start) || removed.contains(local.end));
+            for (AbstractInsnNode insn = first; insn != next;) {
+                AbstractInsnNode following = insn.getNext();
+                method.instructions.remove(insn);
+                insn = following;
+            }
+            ClassWriter out = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+            node.accept(out);
+            return out.toByteArray();
+        }
+        throw new IllegalStateException("MCEF ClientProxy.onInit missing");
+    }
+}

@@ -1,0 +1,11 @@
+[
+  {
+    "name": "CrewX",
+    "version": "${version}",
+    "mcversion": "1.8.9",
+    "authorList": [
+      "crowly",
+      "4ever"
+    ]
+  }
+]
