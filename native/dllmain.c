@@ -1372,13 +1372,13 @@ static DWORD WINAPI bootstrap_thread(LPVOID parameter) {
         goto cleanup;
     }
     if (g_cmpack_host) {
+        profile_path[0] = L'\0';
         if (!find_cmpack_profile_path(profile_path,
                 sizeof(profile_path) / sizeof(profile_path[0]))) {
-            crewx_log(L"CMPack profile is missing: put cmpack-mappings.json next to "
-                    L"CrewXInjector.exe or in .minecraft\\CrewX");
-            goto cleanup;
+            crewx_log(L"no local CMPack profile; loading profiles.cmpack from the GitHub mappings.json");
+        } else {
+            crewx_log(L"using local CMPack profile override: %ls", profile_path);
         }
-        crewx_log(L"CMPack external profile: %ls", profile_path);
         if (!materialize_embedded_product_jar(CREWX_CMPACK_BOOT_RESOURCE_ID,
                 L"cmpack-boot", boot_path,
                 sizeof(boot_path) / sizeof(boot_path[0]))) {

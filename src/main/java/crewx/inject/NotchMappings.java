@@ -319,8 +319,7 @@ public final class NotchMappings {
     }
 
     private static BufferedReader resource(String name) throws IOException {
-        InputStream input = NotchMappings.class.getResourceAsStream(name);
-        if (input == null) throw new IOException(name);
+        InputStream input = MappingRepository.openResource(name);
         return new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
     }
 

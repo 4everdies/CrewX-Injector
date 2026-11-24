@@ -54,17 +54,32 @@ final class CmpackMappings {
             synchronized (CmpackMappings.class) {
                 current = instance;
                 if (current == null) {
-                    File file = resolveProfile();
-                    if (file == null) {
-                        throw new IllegalStateException("CMPack profile not found. Put cmpack-mappings.json "
-                                + "next to CrewXInjector.exe or in .minecraft/CrewX/. Set "
-                                + PROFILE_PROPERTY + " to override.");
-                    }
-                    try {
-                        current = load(file);
-                    } catch (IOException error) {
-                        throw new IllegalStateException("Cannot read CMPack profile " + file
-                                + ": " + error.getMessage(), error);
+                    File explicitProfile = explicitProfile();
+                    JsonObject remoteProfile = explicitProfile == null
+                            ? MappingRepository.profile("cmpack") : null;
+                    if (explicitProfile != null) {
+                        try {
+                            current = load(explicitProfile);
+                        } catch (IOException error) {
+                            throw new IllegalStateException("Cannot read CMPack profile "
+                                    + explicitProfile + ": " + error.getMessage(), error);
+                        }
+                    } else if (remoteProfile != null) {
+                        current = load(remoteProfile, MappingRepository.DOCUMENT_URL + "#/profiles/cmpack");
+                    } else {
+                        File file = resolveProfile();
+                        if (file == null) {
+                            throw new IllegalStateException("CMPack profile not found in the remote "
+                                    + "mappings.json or locally. Put cmpack-mappings.json next to "
+                                    + "CrewXInjector.exe or in .minecraft/CrewX/. Set "
+                                    + PROFILE_PROPERTY + " to override.");
+                        }
+                        try {
+                            current = load(file);
+                        } catch (IOException error) {
+                            throw new IllegalStateException("Cannot read CMPack profile " + file
+                                    + ": " + error.getMessage(), error);
+                        }
                     }
                     instance = current;
                 }
@@ -183,43 +198,53 @@ final class CmpackMappings {
         return null;
     }
 
+    private static File explicitProfile() {
+        String configured = System.getProperty(PROFILE_PROPERTY);
+        if (configured == null || configured.length() == 0) return null;
+        File file = new File(configured);
+        return file.isFile() ? file.getAbsoluteFile() : null;
+    }
+
     private static CmpackMappings load(File file) throws IOException {
         Reader reader = new BufferedReader(new InputStreamReader(
                 new FileInputStream(file), StandardCharsets.UTF_8));
-        CmpackMappings result = new CmpackMappings(file.getAbsolutePath());
         try {
             JsonElement parsed = new JsonParser().parse(reader);
             if (!parsed.isJsonObject()) {
                 throw new IllegalStateException("CMPack profile root must be a JSON object");
             }
-            JsonObject root = parsed.getAsJsonObject();
-            String format = string(root, "format");
-            if (!FORMAT.equals(format)) {
-                throw new IllegalStateException("CMPack profile format is '" + format
-                        + "', expected '" + FORMAT + "'");
-            }
-            String host = string(root, "host");
-            if (!HOST.equals(host)) {
-                throw new IllegalStateException("CMPack profile host is '" + host
-                        + "', expected '" + HOST + "'");
-            }
-            copyObject(root, "classes", result.namedToObf);
-            copyObject(root, "methods", result.namedMethods);
-            copyObject(root, "fields", result.namedFields);
-            JsonElement parents = root.get("parents");
-            if (parents != null && parents.isJsonObject()) {
-                for (Map.Entry<String, JsonElement> entry : parents.getAsJsonObject().entrySet()) {
-                    List<String> list = new ArrayList<String>();
-                    if (entry.getValue().isJsonArray()) {
-                        for (JsonElement parent : entry.getValue().getAsJsonArray()) {
-                            if (parent.isJsonPrimitive()) list.add(parent.getAsString());
-                        }
-                    }
-                    result.namedParents.put(entry.getKey(), list);
-                }
-            }
+            return load(parsed.getAsJsonObject(), file.getAbsolutePath());
         } finally {
             reader.close();
+        }
+    }
+
+    private static CmpackMappings load(JsonObject root, String path) {
+        CmpackMappings result = new CmpackMappings(path);
+        String format = string(root, "format");
+        if (!FORMAT.equals(format)) {
+            throw new IllegalStateException("CMPack profile format is '" + format
+                    + "', expected '" + FORMAT + "'");
+        }
+        String host = string(root, "host");
+        if (!HOST.equals(host)) {
+            throw new IllegalStateException("CMPack profile host is '" + host
+                    + "', expected '" + HOST + "'");
+        }
+        copyObject(root, "classes", result.namedToObf);
+        copyObject(root, "methods", result.namedMethods);
+        copyObject(root, "fields", result.namedFields);
+        JsonElement parents = root.get("parents");
+        if (parents != null && parents.isJsonObject()) {
+            for (Map.Entry<String, JsonElement> entry : parents.getAsJsonObject().entrySet()) {
+                List<String> list = new ArrayList<String>();
+                if (entry.getValue().isJsonArray()) {
+                    for (JsonElement parent : entry.getValue().getAsJsonArray()) {
+                        if (parent.isJsonPrimitive()) list.add(parent.getAsString());
+                    }
+                }
+                result.namedParents.put(entry.getKey(), list);
+            }
         }
         if (result.namedToObf.size() < 1500 || result.namedMethods.size() < 9000
                 || result.namedFields.size() < 4000) {

@@ -69,8 +69,12 @@ public final class CheatBreakerMappings {
     private static Mapping load() {
         Mapping mapping = new Mapping();
         List<String> lines = new ArrayList<String>();
-        InputStream input = CheatBreakerMappings.class.getResourceAsStream("cheatbreaker189.tiny");
-        if (input == null) throw new IllegalStateException("CheatBreaker 1.8.9 mappings missing");
+        InputStream input;
+        try {
+            input = MappingRepository.openResource("cheatbreaker189.tiny");
+        } catch (IOException missing) {
+            throw new IllegalStateException("CheatBreaker 1.8.9 mappings missing", missing);
+        }
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(input, StandardCharsets.UTF_8))) {
             String line;

@@ -31,6 +31,8 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.io.Reader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayDeque;
@@ -54,6 +56,7 @@ import java.util.jar.JarOutputStream;
 public final class BootRemapper {
     public static final String FORMAT = "crewx-cmpack-profile/1";
     public static final String HOST = "CMPack 1.8.8 2.8.11-beta";
+    private static final String MAPPINGS_URL = "https://raw.githubusercontent.com/4everdies/CrewX-Injector/main/src/main/resources/crewx/inject/mappings.json";
     public static final String EXPECTED_SHA256 =
             "464347BEE470967072E3B7A2536D95E1F87645C1A02D2F8B0F120FCC9EBC4A80";
     public static final String PROFILE_PROPERTY = "crewx.cmpack.profile";
@@ -105,7 +108,10 @@ public final class BootRemapper {
 
     /** Returns the absolute path of the remapped payload JAR. */
     public static String remap(String payloadPath, String profilePath) throws Exception {
-        File profileFile = new File(profilePath).getAbsoluteFile();
+        boolean remoteProfile = profilePath == null || profilePath.length() == 0;
+        File profileFile = remoteProfile
+                ? new File(System.getProperty("java.io.tmpdir"), "mappings.json")
+                : new File(profilePath).getAbsoluteFile();
         File payloadFile = new File(payloadPath).getAbsoluteFile();
         File outputFile = new File(payloadFile.getParentFile(),
                 "crewx-cmpack-" + Long.toHexString(System.nanoTime()) + ".jar");
@@ -113,9 +119,11 @@ public final class BootRemapper {
         try {
             log.println("profile=" + profileFile);
             log.println("payload=" + payloadFile);
-            Profile profile = Profile.load(profileFile);
+            Profile profile = remoteProfile ? Profile.loadRemote() : Profile.load(profileFile);
             validate(profile, profileFile, log);
-            System.setProperty(PROFILE_PROPERTY, profileFile.getAbsolutePath());
+            if (!remoteProfile) {
+                System.setProperty(PROFILE_PROPERTY, profileFile.getAbsolutePath());
+            }
             Mapping mapping;
             int remapped = 0;
             int copied = 0;
@@ -491,6 +499,47 @@ public final class BootRemapper {
                     throw new IOException("CMPack profile root must be a JSON object");
                 }
                 JsonObject root = parsed.getAsJsonObject();
+                JsonElement profiles = root.get("profiles");
+                if (profiles != null && profiles.isJsonObject()) {
+                    JsonElement cmpack = profiles.getAsJsonObject().get("cmpack");
+                    if (cmpack != null && cmpack.isJsonObject()) root = cmpack.getAsJsonObject();
+                }
+                return fromJson(root);
+            } finally {
+                reader.close();
+            }
+        }
+        static Profile loadRemote() throws IOException {
+            HttpURLConnection connection = (HttpURLConnection) new URL(MAPPINGS_URL).openConnection();
+            connection.setConnectTimeout(3500);
+            connection.setReadTimeout(7000);
+            connection.setUseCaches(false);
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("User-Agent", "CrewX-Injector-Mappings/1");
+            try {
+                if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                    throw new IOException("Mappings server returned HTTP " + connection.getResponseCode());
+                }
+                File snapshot = File.createTempFile("crewx-mappings-", ".json");
+                snapshot.deleteOnExit();
+                try (InputStream input = connection.getInputStream();
+                        FileOutputStream output = new FileOutputStream(snapshot)) {
+                    byte[] buffer = new byte[8192];
+                    int total = 0;
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        total += count;
+                        if (total > 32 * 1024 * 1024) throw new IOException("Mappings JSON is too large");
+                        output.write(buffer, 0, count);
+                    }
+                }
+                System.setProperty("crewx.mappings.document", snapshot.getAbsolutePath());
+                return load(snapshot);
+            } finally {
+                connection.disconnect();
+            }
+        }
+        private static Profile fromJson(JsonObject root) throws IOException {
                 Profile profile = new Profile();
                 profile.format = string(root, "format");
                 profile.host = string(root, "host");
@@ -512,9 +561,6 @@ public final class BootRemapper {
                     }
                 }
                 return profile;
-            } finally {
-                reader.close();
-            }
         }
 
         private static String string(JsonObject root, String key) {
