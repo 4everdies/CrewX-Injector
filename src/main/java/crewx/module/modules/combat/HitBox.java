@@ -46,6 +46,20 @@ import java.util.stream.Collectors;
 
 public class HitBox extends Module {
     private static final Minecraft mc = Minecraft.getMinecraft();
+
+    private static boolean canRiderInteract(Entity entity) {
+        if (crewx.inject.NotchMappings.isCmpack() || crewx.inject.NotchMappings.isCheatBreaker()) {
+            return false;
+        }
+        try {
+            String method = crewx.inject.NotchMappings.methodName(
+                    "net.minecraft.entity.Entity", "canRiderInteract", "()Z");
+            Object result = entity.getClass().getMethod(method).invoke(entity);
+            return result instanceof Boolean && ((Boolean) result).booleanValue();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
     private MovingObjectPosition targetEntity = null;
     public final FloatProperty multiplier = new FloatProperty("multiplier", 1.2F, 1.0F, 5.0F);
     public final ModeProperty showHitbox = new ModeProperty("show-hitbox", 0, new String[]{"None", "Players", "Mobs", "Animals", "All"});
@@ -103,7 +117,7 @@ public class HitBox extends Module {
                         double interceptDistance = eyePos.distanceTo(intercept.hitVec);
                         if (interceptDistance < closestDistance || closestDistance == 0.0) {
                             if (entity == mc.getRenderViewEntity().ridingEntity
-                                    && (crewx.inject.NotchMappings.isCheatBreaker() || !entity.canRiderInteract())) {
+                                    && !canRiderInteract(entity)) {
                                 if (closestDistance == 0.0) {
                                     pointedEntity = entity;
                                     hitVec = intercept.hitVec;

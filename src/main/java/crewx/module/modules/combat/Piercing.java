@@ -29,6 +29,20 @@ import net.minecraft.util.Vec3;
 public class Piercing extends Module {
     private static final Minecraft mc = Minecraft.getMinecraft();
 
+    private static boolean canRiderInteract(Entity entity) {
+        if (crewx.inject.NotchMappings.isCmpack() || crewx.inject.NotchMappings.isCheatBreaker()) {
+            return false;
+        }
+        try {
+            String method = crewx.inject.NotchMappings.methodName(
+                    "net.minecraft.entity.Entity", "canRiderInteract", "()Z");
+            Object result = entity.getClass().getMethod(method).invoke(entity);
+            return result instanceof Boolean && ((Boolean) result).booleanValue();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     public final ModeProperty sortMode = new ModeProperty("sort-mode", 0, new String[]{"Hurt time", "Health"});
     public final BooleanProperty ignoreBlocks = new BooleanProperty("ignore-blocks", false);
     public final BooleanProperty ignoreTeammates = new BooleanProperty("ignore-teammates", true);
@@ -111,8 +125,7 @@ public class Piercing extends Module {
             if (dist > 3.0D) continue;
             if (dist > reach || dist >= bestDist) continue;
             if (this.insideHitboxOnly.getValue() && dist > 0.10000000149011612D) continue;
-            if (entity == viewEntity.ridingEntity
-                    && (crewx.inject.NotchMappings.isCheatBreaker() || !viewEntity.canRiderInteract())
+            if (entity == viewEntity.ridingEntity && !canRiderInteract(viewEntity)
                     && best != null) continue;
 
             boolean living = entity instanceof EntityLivingBase;

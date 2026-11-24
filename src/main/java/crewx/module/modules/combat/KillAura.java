@@ -948,6 +948,9 @@ public class KillAura extends Module {
 
     @EventTarget
     public void onRightClick(RightClickMouseEvent event) {
+        if (ItemUtil.isHoldingNonEmpty()) {
+            return;
+        }
         if (this.isBlocking) {
             event.setCancelled(true);
         } else {

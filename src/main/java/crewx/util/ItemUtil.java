@@ -192,6 +192,27 @@ public class ItemUtil {
         return bestSlot;
     }
 
+    private static boolean matchesToolClass(Item item, ItemStack itemStack, String toolClass) {
+        if (crewx.inject.NotchMappings.isCmpack() || crewx.inject.NotchMappings.isCheatBreaker()) {
+            return isVanillaToolClass(item, toolClass);
+        }
+        try {
+            String method = crewx.inject.NotchMappings.methodName(
+                    "net.minecraft.item.Item", "getToolClasses",
+                    "(Lnet/minecraft/item/ItemStack;)Ljava/util/Set;");
+            Object result = item.getClass().getMethod(method, ItemStack.class).invoke(item, itemStack);
+            return result instanceof java.util.Set && ((java.util.Set<?>) result).contains(toolClass);
+        } catch (Throwable ignored) {
+            return isVanillaToolClass(item, toolClass);
+        }
+    }
+
+    private static boolean isVanillaToolClass(Item item, String toolClass) {
+        return "pickaxe".equals(toolClass) && item instanceof ItemPickaxe
+                || "shovel".equals(toolClass) && item instanceof ItemSpade
+                || "axe".equals(toolClass) && item instanceof ItemAxe;
+    }
+
     public static int findInventorySlot(String toolClass, int startSlot, boolean checkDurability) {
         int bestSlot = -1;
         float bestEfficiency = 1.0f;
@@ -201,12 +222,7 @@ public class ItemUtil {
             ItemStack itemStack = ItemUtil.mc.thePlayer.inventory.getStackInSlot(currentSlot);
             if (itemStack == null) continue;
             if (!(itemStack.getItem() instanceof ItemTool)) continue;
-            if (crewx.inject.NotchMappings.isCheatBreaker()) {
-                Item tool = itemStack.getItem();
-                if (!("pickaxe".equals(toolClass) && tool instanceof ItemPickaxe
-                        || "shovel".equals(toolClass) && tool instanceof ItemSpade
-                        || "axe".equals(toolClass) && tool instanceof ItemAxe)) continue;
-            } else if (!itemStack.getItem().getToolClasses(itemStack).contains(toolClass)) continue;
+            if (!matchesToolClass(itemStack.getItem(), itemStack, toolClass)) continue;
             if (checkDurability) {
                 if (itemStack.isItemDamaged()) {
                     if (itemStack.getMaxDamage() - itemStack.getItemDamage() < 30) {

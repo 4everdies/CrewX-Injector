@@ -32,6 +32,8 @@ public final class CrewXAccessors {
 
     private static final Map<String, Field> FIELDS = new ConcurrentHashMap<String, Field>();
     private static final Map<String, Method> METHODS = new ConcurrentHashMap<String, Method>();
+    private static final Map<String, Boolean> REPORTED_MISSING =
+            new ConcurrentHashMap<String, Boolean>();
 
     private CrewXAccessors() {
     }
@@ -106,6 +108,7 @@ public final class CrewXAccessors {
         try {
             Field found = field(owner, name);
             if (found == null) {
+                reportMissing("accessor field NOT FOUND " + owner + "#" + name);
                 return null;
             }
             return found.get(target);
@@ -137,12 +140,20 @@ public final class CrewXAccessors {
                 found = method(owner, name, toObjects(arguments));
             }
             if (found == null) {
+                reportMissing("accessor method NOT FOUND " + owner + "#" + name + " "
+                        + java.util.Arrays.toString(parameters));
                 return null;
             }
             return found.invoke(target, arguments);
         } catch (Throwable error) {
             CrewXBootstrap.log("accessor invoke FAIL " + owner + "#" + name + ": " + error);
             return null;
+        }
+    }
+
+    private static void reportMissing(String message) {
+        if (REPORTED_MISSING.put(message, Boolean.TRUE) == null) {
+            CrewXBootstrap.log(message);
         }
     }
 
@@ -301,7 +312,7 @@ public final class CrewXAccessors {
 
 
     public static Object getMaterial(Object target) {
-        return readField("net.minecraft.item.ItemSword", "toolMaterial", target);
+        return readField("net.minecraft.item.ItemSword", "material", target);
     }
 
 

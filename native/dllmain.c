@@ -21,6 +21,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 
@@ -29,6 +30,7 @@
 #define CREWX_NOTCH_JAR_RESOURCE_ID 424
 #define CREWX_CHEATBREAKER_JAR_RESOURCE_ID 425
 #define CREWX_ORNITHE_JAR_RESOURCE_ID 426
+#define CREWX_CMPACK_BOOT_RESOURCE_ID 427
 #define CREWX_CB_MINECRAFT "IlIlIlIIllIllIIIIIIIIIIlI"
 #define CREWX_CB_GET_MINECRAFT "IlIIIllIlllllIlIlIlllIIIl"
 #define CREWX_CB_DISPLAY_WIDTH "IlllIllIIIIllIllIIIlIlIll"
@@ -39,6 +41,7 @@ static JavaVM *g_vm = NULL;
 static jvmtiEnv *g_jvmti = NULL;
 static jobject g_payload_loader = NULL;
 static volatile LONG g_unload_requested = 0;
+static volatile LONG g_cmpack_host = 0;
 __declspec(dllexport) DWORD WINAPI CrewXUnload(LPVOID unused);
 
 static SRWLOCK g_capture_lock = SRWLOCK_INIT;
@@ -150,7 +153,8 @@ static jstring new_wide_string(JNIEnv *env, const wchar_t *value) {
 }
 
 static int materialize_embedded_product_jar(
-        int resource_id, wchar_t *jar_path, size_t jar_capacity) {
+        int resource_id, const wchar_t *label,
+        wchar_t *jar_path, size_t jar_capacity) {
     HRSRC resource;
     HGLOBAL loaded_resource;
     const unsigned char *bytes;
@@ -191,7 +195,7 @@ static int materialize_embedded_product_jar(
         return 0;
     }
     if (_snwprintf_s(jar_path, jar_capacity, _TRUNCATE,
-            L"%ls\\crewx-payload-%lu.jar", temp_directory,
+            L"%ls\\crewx-%ls-%lu.jar", temp_directory, label,
             GetCurrentProcessId()) < 0) {
         crewx_log(L"temporary product JAR path is too long");
         return 0;
@@ -233,6 +237,23 @@ cleanup:
     return result;
 }
 
+static int is_cmpack_minecraft_class(JNIEnv *env, jclass klass) {
+    jmethodID render_item;
+    jmethodID version;
+    if (klass == NULL) return 0;
+    render_item = (*env)->GetMethodID(env, klass, "gK", "()LsH;");
+    if (render_item == NULL || (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return 0;
+    }
+    version = (*env)->GetMethodID(env, klass, "gB", "()Ljava/lang/String;");
+    if (version == NULL || (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return 0;
+    }
+    return 1;
+}
+
 static jobject find_loaded_minecraft_class_loader(JNIEnv *env) {
     jint count = 0;
     jclass *classes = NULL;
@@ -248,7 +269,9 @@ static jobject find_loaded_minecraft_class_loader(JNIEnv *env) {
                 == JVMTI_ERROR_NONE && signature != NULL) {
             if (strcmp(signature, "Lnet/minecraft/client/Minecraft;") == 0
                     || strcmp(signature, "Lave;") == 0
-                    || strcmp(signature, "L" CREWX_CB_MINECRAFT ";") == 0) {
+                    || strcmp(signature, "L" CREWX_CB_MINECRAFT ";") == 0
+                    || (strcmp(signature, "Lir;") == 0
+                            && is_cmpack_minecraft_class(env, classes[index]))) {
                 jobject class_loader = NULL;
                 if ((*g_jvmti)->GetClassLoader(g_jvmti, classes[index], &class_loader)
                         == JVMTI_ERROR_NONE && class_loader != NULL) {
@@ -376,6 +399,21 @@ static int payload_resource_for_loader(
         return 0;
     }
     (*env)->DeleteLocalRef(env, name);
+    name = (*env)->NewStringUTF(env, "ir");
+    jclass cmpack_class = name == NULL ? NULL
+            : (jclass)(*env)->CallObjectMethod(env, loader, load_class, name);
+    if (name != NULL) (*env)->DeleteLocalRef(env, name);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        cmpack_class = NULL;
+    }
+    if (cmpack_class != NULL && is_cmpack_minecraft_class(env, cmpack_class)) {
+        (*env)->DeleteLocalRef(env, cmpack_class);
+        g_cmpack_host = 1;
+        crewx_log(L"detected CMPack 1.8.8 members (ir.gK/gB); selecting external-profile route");
+        return CREWX_NAMED_JAR_RESOURCE_ID;
+    }
+    if (cmpack_class != NULL) (*env)->DeleteLocalRef(env, cmpack_class);
     name = (*env)->NewStringUTF(env, CREWX_CB_MINECRAFT);
     jclass cb_class = name == NULL ? NULL
             : (jclass)(*env)->CallObjectMethod(env, loader, load_class, name);
@@ -454,6 +492,141 @@ static int payload_resource_for_loader(
     if (report_unavailable) log_minecraft_mapping_candidates(minecraft_class);
     crewx_log(L"Minecraft member mapping is unsupported; refusing injection");
     return 0;
+}
+
+static int existing_file(const wchar_t *path) {
+    DWORD attributes = GetFileAttributesW(path);
+    return attributes != INVALID_FILE_ATTRIBUTES
+            && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+static int find_cmpack_profile_path(wchar_t *path, size_t capacity) {
+    wchar_t module_path[MAX_PATH];
+    wchar_t app_data[MAX_PATH];
+    wchar_t current[MAX_PATH];
+    wchar_t candidate[MAX_PATH];
+    wchar_t *separator;
+    DWORD length;
+
+    length = GetEnvironmentVariableW(L"CREWX_CMPACK_PROFILE",
+            candidate, (DWORD)capacity);
+    if (length > 0 && length < capacity && existing_file(candidate)) {
+        wcsncpy_s(path, capacity, candidate, _TRUNCATE);
+        return 1;
+    }
+    if (GetModuleFileNameW(g_module, module_path,
+            (DWORD)(sizeof(module_path) / sizeof(module_path[0]))) != 0) {
+        separator = wcsrchr(module_path, L'\\');
+        if (separator != NULL) {
+            *separator = L'\0';
+            _snwprintf_s(candidate, sizeof(candidate) / sizeof(candidate[0]),
+                    _TRUNCATE, L"%ls\\cmpack-mappings.json", module_path);
+            if (existing_file(candidate)) {
+                wcsncpy_s(path, capacity, candidate, _TRUNCATE);
+                return 1;
+            }
+        }
+    }
+    length = GetEnvironmentVariableW(L"APPDATA", app_data,
+            (DWORD)(sizeof(app_data) / sizeof(app_data[0])));
+    if (length > 0 && length < (DWORD)(sizeof(app_data) / sizeof(app_data[0]))) {
+        _snwprintf_s(candidate, sizeof(candidate) / sizeof(candidate[0]),
+                _TRUNCATE, L"%ls\\.minecraft\\CrewX\\cmpack-mappings.json", app_data);
+        if (existing_file(candidate)) {
+            wcsncpy_s(path, capacity, candidate, _TRUNCATE);
+            return 1;
+        }
+        _snwprintf_s(candidate, sizeof(candidate) / sizeof(candidate[0]),
+                _TRUNCATE,
+                L"%ls\\.minecraft\\versions\\cmpack_1.8.8\\cmpack-mappings.json",
+                app_data);
+        if (existing_file(candidate)) {
+            wcsncpy_s(path, capacity, candidate, _TRUNCATE);
+            return 1;
+        }
+    }
+    if (GetCurrentDirectoryW((DWORD)(sizeof(current) / sizeof(current[0])), current)
+            != 0) {
+        _snwprintf_s(candidate, sizeof(candidate) / sizeof(candidate[0]),
+                _TRUNCATE, L"%ls\\cmpack-mappings.json", current);
+        if (existing_file(candidate)) {
+            wcsncpy_s(path, capacity, candidate, _TRUNCATE);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int call_cmpack_remap(JNIEnv *env, jobject loader,
+        const wchar_t *payload_path, const wchar_t *profile_path,
+        wchar_t *output_path, size_t capacity) {
+    jclass loader_class = (*env)->FindClass(env, "java/lang/ClassLoader");
+    jmethodID load_class;
+    jclass remapper_class;
+    jmethodID remap;
+    jstring payload_name;
+    jstring profile_name;
+    jstring result;
+    const jchar *characters;
+    jsize length;
+    if (loader_class == NULL) {
+        crewx_log_pending_exception(env, L"resolve ClassLoader for CMPack remap");
+        return 0;
+    }
+    load_class = (*env)->GetMethodID(env, loader_class, "loadClass",
+            "(Ljava/lang/String;)Ljava/lang/Class;");
+    if (load_class == NULL) {
+        crewx_log_pending_exception(env, L"resolve ClassLoader.loadClass for CMPack remap");
+        return 0;
+    }
+    payload_name = new_wide_string(env, L"crewx.inject.BootRemapper");
+    remapper_class = payload_name == NULL ? NULL
+            : (jclass)(*env)->CallObjectMethod(env, loader, load_class, payload_name);
+    if (payload_name != NULL) (*env)->DeleteLocalRef(env, payload_name);
+    if (remapper_class == NULL || (*env)->ExceptionCheck(env)) {
+        crewx_log_pending_exception(env, L"load crewx.inject.BootRemapper");
+        return 0;
+    }
+    remap = (*env)->GetStaticMethodID(env, remapper_class, "remap",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    if (remap == NULL) {
+        crewx_log_pending_exception(env, L"resolve BootRemapper.remap");
+        (*env)->DeleteLocalRef(env, remapper_class);
+        return 0;
+    }
+    payload_name = new_wide_string(env, payload_path);
+    profile_name = new_wide_string(env, profile_path);
+    if (payload_name == NULL || profile_name == NULL) {
+        if (payload_name != NULL) (*env)->DeleteLocalRef(env, payload_name);
+        if (profile_name != NULL) (*env)->DeleteLocalRef(env, profile_name);
+        (*env)->DeleteLocalRef(env, remapper_class);
+        return 0;
+    }
+    result = (jstring)(*env)->CallStaticObjectMethod(env, remapper_class, remap,
+            payload_name, profile_name);
+    (*env)->DeleteLocalRef(env, payload_name);
+    (*env)->DeleteLocalRef(env, profile_name);
+    (*env)->DeleteLocalRef(env, remapper_class);
+    if (result == NULL || (*env)->ExceptionCheck(env)) {
+        crewx_log_pending_exception(env, L"BootRemapper.remap");
+        return 0;
+    }
+    length = (*env)->GetStringLength(env, result);
+    if ((size_t)length + 1 > capacity) {
+        crewx_log(L"remapped payload path is too long");
+        (*env)->DeleteLocalRef(env, result);
+        return 0;
+    }
+    characters = (*env)->GetStringChars(env, result, NULL);
+    if (characters == NULL) {
+        (*env)->DeleteLocalRef(env, result);
+        return 0;
+    }
+    memcpy(output_path, characters, (size_t)length * sizeof(wchar_t));
+    output_path[length] = L'\0';
+    (*env)->ReleaseStringChars(env, result, characters);
+    (*env)->DeleteLocalRef(env, result);
+    return 1;
 }
 
 static int add_jar_to_loader(
@@ -1097,6 +1270,9 @@ static DWORD WINAPI bootstrap_thread(LPVOID parameter) {
     jsize vm_count = 0;
     jobject loader = NULL;
     wchar_t jar_path[MAX_PATH];
+    wchar_t profile_path[MAX_PATH];
+    wchar_t boot_path[MAX_PATH];
+    wchar_t remapped_path[MAX_PATH];
     int attached = 0;
     int resource_id = 0;
     int attempt;
@@ -1192,10 +1368,37 @@ static DWORD WINAPI bootstrap_thread(LPVOID parameter) {
         }
     }
     if (resource_id == 0 || !materialize_embedded_product_jar(resource_id,
-            jar_path, sizeof(jar_path) / sizeof(jar_path[0]))) {
+            L"payload", jar_path, sizeof(jar_path) / sizeof(jar_path[0]))) {
         goto cleanup;
     }
-    if (!add_jar_to_loader(env, &loader, jar_path)) {
+    if (g_cmpack_host) {
+        if (!find_cmpack_profile_path(profile_path,
+                sizeof(profile_path) / sizeof(profile_path[0]))) {
+            crewx_log(L"CMPack profile is missing: put cmpack-mappings.json next to "
+                    L"CrewXInjector.exe or in .minecraft\\CrewX");
+            goto cleanup;
+        }
+        crewx_log(L"CMPack external profile: %ls", profile_path);
+        if (!materialize_embedded_product_jar(CREWX_CMPACK_BOOT_RESOURCE_ID,
+                L"cmpack-boot", boot_path,
+                sizeof(boot_path) / sizeof(boot_path[0]))) {
+            goto cleanup;
+        }
+        if (!add_jar_to_loader(env, &loader, boot_path)) {
+            goto cleanup;
+        }
+        if (!call_cmpack_remap(env, loader, jar_path, profile_path,
+                remapped_path, sizeof(remapped_path) / sizeof(remapped_path[0]))) {
+            crewx_log(L"CMPack payload remap failed; refusing injection");
+            goto cleanup;
+        }
+        crewx_log(L"CMPack payload remapped: %ls", remapped_path);
+        if (!add_jar_to_loader(env, &loader, remapped_path)) {
+            goto cleanup;
+        }
+        wcsncpy_s(jar_path, sizeof(jar_path) / sizeof(jar_path[0]),
+                remapped_path, _TRUNCATE);
+    } else if (!add_jar_to_loader(env, &loader, jar_path)) {
         goto cleanup;
     }
     if (!set_current_context_class_loader(env, loader)) {

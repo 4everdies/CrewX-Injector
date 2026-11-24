@@ -49,6 +49,34 @@ New-Item -ItemType Directory -Path $taskClasses -Force | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Falha ao compilar as ferramentas de empacotamento.' }
 
 $taskLibs = Join-Path $taskJavaProject 'build\libs'
+$taskGsonJar = @(Get-ChildItem -LiteralPath (Join-Path $env:USERPROFILE '.gradle\caches\modules-2\files-2.1\com.google.code.gson\gson') -Recurse -Filter 'gson-2.2.4.jar' -File -ErrorAction SilentlyContinue | Select-Object -First 1)
+if ($taskGsonJar.Count -eq 0) { throw 'Dependencia Gson 2.2.4 ausente.' }
+$taskBootClasses = Join-Path $taskClasses 'cmpack-boot'
+if (Test-Path -LiteralPath $taskBootClasses) { Remove-Item -LiteralPath $taskBootClasses -Recurse -Force }
+New-Item -ItemType Directory -Path $taskBootClasses -Force | Out-Null
+$taskJdk8Javac = Join-Path $Jdk8 'bin\javac.exe'
+& $taskJdk8Javac -cp "$taskAsmCp;$($taskGsonJar[0].FullName)" -d $taskBootClasses (Join-Path $taskTools 'BootRemapper.java')
+if ($LASTEXITCODE -ne 0) { throw 'Falha ao compilar o remapeador CMPack.' }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+foreach ($taskAsmJar in $taskAsmJars) {
+    $taskZip = [System.IO.Compression.ZipFile]::OpenRead($taskAsmJar)
+    try {
+        foreach ($taskEntry in $taskZip.Entries) {
+            if (-not $taskEntry.Name) { continue }
+            if ($taskEntry.FullName -like 'META-INF/*' -or $taskEntry.Name -eq 'module-info.class') { continue }
+            $taskDestination = Join-Path $taskBootClasses $taskEntry.FullName
+            New-Item -ItemType Directory -Path (Split-Path -Parent $taskDestination) -Force | Out-Null
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($taskEntry, $taskDestination, $true)
+        }
+    } finally {
+        $taskZip.Dispose()
+    }
+}
+$taskCmpackBoot = Join-Path $taskLibs 'CrewX-cmpack-boot.jar'
+if (Test-Path -LiteralPath $taskCmpackBoot) { Remove-Item -LiteralPath $taskCmpackBoot -Force }
+& (Join-Path $Jdk8 'bin\jar.exe') cf $taskCmpackBoot -C $taskBootClasses .
+if ($LASTEXITCODE -ne 0) { throw 'Falha ao empacotar o remapeador CMPack.' }
+
 $taskNamedInput = Get-ChildItem -LiteralPath (Join-Path $taskJavaProject 'build\intermediates') -Filter '*non-obfuscated-with-deps.jar' -File | Select-Object -First 1
 if (-not $taskNamedInput) { throw 'JAR named com dependencias nao foi gerado.' }
 $taskForgeInput = Join-Path $taskLibs 'CrewX.jar'
@@ -140,12 +168,30 @@ if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
         }
     }
 }
+$taskSdkRoot = 'D:\winsdk'
+if (-not (Get-Command rc.exe -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $taskSdkRoot)) {
+    $taskSdkCpp = Join-Path $taskSdkRoot 'microsoft.windows.sdk.cpp\c'
+    $taskSdkX64 = Join-Path $taskSdkRoot 'microsoft.windows.sdk.cpp.x64\c'
+    $taskSdkVersion = @(Get-ChildItem -LiteralPath (Join-Path $taskSdkCpp 'Include') -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1)[0]
+    if ($taskSdkVersion) {
+        $taskSdkTools = Join-Path $taskSdkRoot "microsoft.windows.sdk.buildtools\bin\$($taskSdkVersion.Name)\x64"
+        if (Test-Path -LiteralPath (Join-Path $taskSdkTools 'rc.exe')) {
+            $env:INCLUDE = "$($taskSdkVersion.FullName)\ucrt;$($taskSdkVersion.FullName)\shared;$($taskSdkVersion.FullName)\um;$env:INCLUDE"
+            $env:LIB = "$taskSdkX64\ucrt\x64;$taskSdkX64\um\x64;$env:LIB"
+            $env:PATH = "$taskSdkTools;$env:PATH"
+            $env:WindowsSdkDir = "$taskSdkCpp\"
+            $env:WindowsSDKVersion = "$($taskSdkVersion.Name)\"
+            Write-Host "Windows SDK alternativo: $($taskSdkVersion.Name)"
+        }
+    }
+}
 $taskCmakeArgs = @('-S', $taskNative, '-B', $taskBuild, '-G', 'NMake Makefiles',
     '-DCMAKE_BUILD_TYPE=Release', "-DCREWX_JAVA_HOME=$env:JAVA_HOME",
     "-DCREWX_PRODUCT_JAR=$taskForgePayload",
     "-DCREWX_PRODUCT_JAR_NAMED=$taskNamedPayload",
     "-DCREWX_PRODUCT_JAR_NOTCH=$taskNotchPayload",
-    "-DCREWX_PRODUCT_JAR_ORNITHE=$taskOrnithePayload")
+    "-DCREWX_PRODUCT_JAR_ORNITHE=$taskOrnithePayload",
+    "-DCREWX_CMPACK_BOOT=$taskCmpackBoot")
 if ($taskCheatBreakerAvailable) {
     $taskCmakeArgs += "-DCREWX_PRODUCT_JAR_CHEATBREAKER=$taskCheatBreakerPayload"
 }

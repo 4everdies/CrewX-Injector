@@ -124,6 +124,9 @@ public class RotationUtil {
     public static MovingObjectPosition rayTrace(float yaw, float pitch, double distance, float partialTicks) {
         Vec3 eyePos = RotationUtil.mc.thePlayer.getPositionEyes(partialTicks);
         Vec3 lookVec = ((IAccessorEntity) RotationUtil.mc.thePlayer).callGetVectorForRotation(pitch, yaw);
+        if (lookVec == null) {
+            lookVec = vectorForRotation(pitch, yaw);
+        }
         Vec3 targetPos = eyePos.addVector(lookVec.xCoord * distance, lookVec.yCoord * distance, lookVec.zCoord * distance);
         return RotationUtil.mc.theWorld.rayTraceBlocks(eyePos, targetPos);
     }
@@ -138,7 +141,18 @@ public class RotationUtil {
     public static MovingObjectPosition rayTrace(AxisAlignedBB boundingBox, float yaw, float pitch, double distance) {
         Vec3 eyePos = RotationUtil.mc.thePlayer.getPositionEyes(1.0f);
         Vec3 lookVec = ((IAccessorEntity) RotationUtil.mc.thePlayer).callGetVectorForRotation(pitch, yaw);
+        if (lookVec == null) {
+            lookVec = vectorForRotation(pitch, yaw);
+        }
         Vec3 targetPos = eyePos.addVector(lookVec.xCoord * distance, lookVec.yCoord * distance, lookVec.zCoord * distance);
         return boundingBox.calculateIntercept(eyePos, targetPos);
+    }
+
+    private static Vec3 vectorForRotation(float pitch, float yaw) {
+        float f = MathHelper.cos(-yaw * 0.017453292F - (float) Math.PI);
+        float f1 = MathHelper.sin(-yaw * 0.017453292F - (float) Math.PI);
+        float f2 = -MathHelper.cos(-pitch * 0.017453292F);
+        float f3 = MathHelper.sin(-pitch * 0.017453292F);
+        return new Vec3((double) (f1 * f2), (double) f3, (double) (f * f2));
     }
 }

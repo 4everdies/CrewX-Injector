@@ -23,12 +23,44 @@ public final class NotchMappings {
     private static Boolean ornithe;
     private static Boolean srg;
     private static Boolean cheatBreaker;
+    private static Boolean cmpack;
 
     private NotchMappings() {
     }
 
+    public static synchronized boolean isCmpack() {
+        if (cmpack == null) {
+            ClassLoader loader = Thread.currentThread().getContextClassLoader();
+            if (loader == null) loader = NotchMappings.class.getClassLoader();
+            boolean detected = false;
+            try {
+                Class.forName("pl.cmpack.Main", false, loader);
+                detected = true;
+            } catch (Throwable ignored) {
+            }
+            if (!detected) {
+                try {
+                    Class<?> minecraft = Class.forName("ir", false, loader);
+                    minecraft.getDeclaredMethod("gK");
+                    minecraft.getDeclaredMethod("gB");
+                    Class<?> entity = Class.forName("zI", false, loader);
+                    entity.getDeclaredMethod("B", entity);
+                    detected = true;
+                } catch (Throwable ignored) {
+                }
+            }
+            if (!detected && loader != null) {
+                detected = loader.getResource("ir.class") != null
+                        && loader.getResource("zI.class") != null
+                        && loader.getResource("pM.class") != null;
+            }
+            cmpack = detected;
+        }
+        return cmpack.booleanValue();
+    }
+
     public static synchronized boolean isNotch() {
-        if (isCheatBreaker()) return false;
+        if (isCheatBreaker() || isCmpack()) return false;
         if (isOrnithe()) return true;
         if (notch == null) {
             try {
@@ -95,6 +127,7 @@ public final class NotchMappings {
 
     public static String className(String named) {
         if (isCheatBreaker()) return CheatBreakerMappings.className(named);
+        if (isCmpack()) return CmpackMappings.get().className(named);
         if (!isNotch()) return named;
         String internal = named.replace('.', '/');
         return active().namedToObf.getOrDefault(internal, internal).replace('/', '.');
@@ -102,6 +135,7 @@ public final class NotchMappings {
 
     public static String methodName(String owner, String name, String descriptor) {
         if (isCheatBreaker()) return CheatBreakerMappings.methodName(owner, name, descriptor);
+        if (isCmpack()) return CmpackMappings.get().methodName(owner, name, descriptor);
         if (!isNotch()) {
             if (!isSrg()) return name;
             return MAPPING.namedSrgMethods.getOrDefault(
@@ -113,6 +147,7 @@ public final class NotchMappings {
 
     public static String fieldName(String owner, String name) {
         if (isCheatBreaker()) return CheatBreakerMappings.fieldName(owner, name);
+        if (isCmpack()) return CmpackMappings.get().fieldName(owner, name);
         if (!isNotch()) {
             if (!isSrg()) return name;
             return MAPPING.namedSrgFields.getOrDefault(owner.replace('.', '/') + "/" + name, name);
@@ -132,6 +167,7 @@ public final class NotchMappings {
     public static boolean matchesMethod(String namedName, Method candidate) {
         if (namedName.equals(candidate.getName())) return true;
         if (isCheatBreaker()) return CheatBreakerMappings.matchesMethod(namedName, candidate);
+        if (isCmpack()) return CmpackMappings.get().matchesMethod(namedName, candidate);
         if (!isNotch()) {
             if (!isSrg()) return false;
             String key = candidate.getDeclaringClass().getName().replace('.', '/')
@@ -145,11 +181,12 @@ public final class NotchMappings {
 
     public static byte[] toNamed(byte[] notchBytes) {
         if (isCheatBreaker()) return CheatBreakerMappings.toNamed(notchBytes);
+        if (isCmpack()) return CmpackMappings.get().toNamed(notchBytes);
         return remap(notchBytes, active().toNamed);
     }
 
     public static boolean isSrg() {
-        if (isCheatBreaker()) return false;
+        if (isCheatBreaker() || isCmpack()) return false;
         if (isNotch()) return false;
         if (srg == null) {
             try {
@@ -174,6 +211,7 @@ public final class NotchMappings {
 
     public static byte[] toNotch(byte[] namedBytes) {
         if (isCheatBreaker()) return CheatBreakerMappings.toCheatBreaker(namedBytes);
+        if (isCmpack()) return CmpackMappings.get().toNotch(namedBytes);
         return remap(namedBytes, active().toNotch);
     }
 
@@ -181,6 +219,7 @@ public final class NotchMappings {
             throws IOException {
         String obfuscated = isCheatBreaker()
                 ? CheatBreakerMappings.classInternalName(namedInternal)
+                : isCmpack() ? CmpackMappings.get().namedToObf.get(namedInternal)
                 : active().namedToObf.get(namedInternal);
         if (obfuscated == null) return null;
         InputStream input = loader.getResourceAsStream(obfuscated + ".class");

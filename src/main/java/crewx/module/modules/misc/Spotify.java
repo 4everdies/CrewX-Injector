@@ -3,7 +3,7 @@ package crewx.module.modules.misc;
 import crewx.module.Module;
 import crewx.spotify.GuiSpotify;
 import crewx.spotify.SpotifyService;
-import crewx.spotify.SpotifyWebScreen;
+import crewx.spotify.SpotifyWebLauncher;
 import net.minecraft.client.Minecraft;
 
 /** Opens the standalone Spotify controls without running work during gameplay. */
@@ -29,11 +29,26 @@ public final class Spotify extends Module {
 
     @Override
     public void setEnabled(boolean enabled) {
-        if (!enabled) return;
         Minecraft mc = Minecraft.getMinecraft();
+        if (!enabled) {
+            super.setEnabled(false);
+            if (mc != null && (mc.currentScreen instanceof GuiSpotify
+                    || (mc.currentScreen != null && "crewx.spotify.SpotifyWebScreen".equals(
+                            mc.currentScreen.getClass().getName())))) {
+                mc.displayGuiScreen(null);
+            }
+            return;
+        }
+        if (mc == null || mc.thePlayer == null) {
+            // Never reopen Spotify from a saved config on the title screen.
+            super.setEnabled(false);
+            return;
+        }
         SpotifyService spotify = service();
-        mc.displayGuiScreen(spotify.getClientId().isEmpty()
-                ? new GuiSpotify(mc.currentScreen, spotify)
-                : new SpotifyWebScreen(mc.currentScreen, spotify));
+        super.setEnabled(true);
+        if (spotify.getClientId().isEmpty()
+                || !SpotifyWebLauncher.open(mc, mc.currentScreen, spotify)) {
+            mc.displayGuiScreen(new GuiSpotify(mc.currentScreen, spotify));
+        }
     }
 }

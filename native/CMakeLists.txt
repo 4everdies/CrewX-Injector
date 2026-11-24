@@ -40,6 +40,8 @@ set(CREWX_PRODUCT_JAR_ORNITHE "" CACHE FILEPATH
         "CrewX Ornithe intermediary payload JAR for OneClient 1.8.9")
 set(CREWX_PRODUCT_JAR_CHEATBREAKER "" CACHE FILEPATH
         "CrewX payload remapped for the audited CheatBreaker 1.8.9 build")
+set(CREWX_CMPACK_BOOT "" CACHE FILEPATH
+        "CMPack runtime remapper (BootRemapper + ASM) embedded into CrewXNative.dll")
 if(NOT CREWX_PRODUCT_JAR OR NOT EXISTS "${CREWX_PRODUCT_JAR}")
     message(FATAL_ERROR
             "CREWX_PRODUCT_JAR must name an existing payload JAR")
@@ -61,14 +63,20 @@ if(NOT CREWX_PRODUCT_JAR_ORNITHE OR NOT EXISTS "${CREWX_PRODUCT_JAR_ORNITHE}")
 endif()
 get_filename_component(CREWX_PRODUCT_JAR_ORNITHE
         "${CREWX_PRODUCT_JAR_ORNITHE}" ABSOLUTE)
+if(NOT CREWX_CMPACK_BOOT OR NOT EXISTS "${CREWX_CMPACK_BOOT}")
+    message(FATAL_ERROR "CREWX_CMPACK_BOOT must name an existing remapper JAR")
+endif()
+get_filename_component(CREWX_CMPACK_BOOT "${CREWX_CMPACK_BOOT}" ABSOLUTE)
 file(TO_CMAKE_PATH "${CREWX_PRODUCT_JAR}" CREWX_PRODUCT_JAR_RC_PATH)
 file(TO_CMAKE_PATH "${CREWX_PRODUCT_JAR_NAMED}" CREWX_PRODUCT_JAR_NAMED_RC_PATH)
 file(TO_CMAKE_PATH "${CREWX_PRODUCT_JAR_NOTCH}" CREWX_PRODUCT_JAR_NOTCH_RC_PATH)
 file(TO_CMAKE_PATH "${CREWX_PRODUCT_JAR_ORNITHE}" CREWX_PRODUCT_JAR_ORNITHE_RC_PATH)
+file(TO_CMAKE_PATH "${CREWX_CMPACK_BOOT}" CREWX_CMPACK_BOOT_RC_PATH)
 configure_file(payload.rc.in generated/payload.rc @ONLY)
 configure_file(payload_named.rc.in generated/payload_named.rc @ONLY)
 configure_file(payload_notch.rc.in generated/payload_notch.rc @ONLY)
 configure_file(payload_ornithe.rc.in generated/payload_ornithe.rc @ONLY)
+configure_file(payload_cmpack_boot.rc.in generated/payload_cmpack_boot.rc @ONLY)
 set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/payload.rc"
         APPEND PROPERTY OBJECT_DEPENDS "${CREWX_PRODUCT_JAR}")
 set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/payload_named.rc"
@@ -77,12 +85,15 @@ set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/payload_notch.rc"
         APPEND PROPERTY OBJECT_DEPENDS "${CREWX_PRODUCT_JAR_NOTCH}")
 set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/payload_ornithe.rc"
         APPEND PROPERTY OBJECT_DEPENDS "${CREWX_PRODUCT_JAR_ORNITHE}")
+set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/payload_cmpack_boot.rc"
+        APPEND PROPERTY OBJECT_DEPENDS "${CREWX_CMPACK_BOOT}")
 set(CREWX_NATIVE_SOURCES
         dllmain.c
         "${CMAKE_CURRENT_BINARY_DIR}/generated/payload.rc"
         "${CMAKE_CURRENT_BINARY_DIR}/generated/payload_named.rc"
         "${CMAKE_CURRENT_BINARY_DIR}/generated/payload_notch.rc")
 list(APPEND CREWX_NATIVE_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/generated/payload_ornithe.rc")
+list(APPEND CREWX_NATIVE_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/generated/payload_cmpack_boot.rc")
 if(CREWX_PRODUCT_JAR_CHEATBREAKER)
     if(NOT EXISTS "${CREWX_PRODUCT_JAR_CHEATBREAKER}")
         message(FATAL_ERROR "CREWX_PRODUCT_JAR_CHEATBREAKER does not exist")

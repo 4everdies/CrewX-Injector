@@ -99,8 +99,8 @@ public class BindCommand extends Command {
             try {
                 String numStr = buttonName.substring(5);
                 int buttonNum = Integer.parseInt(numStr);
-                if (buttonNum >= 0 && buttonNum < Mouse.getButtonCount()) {
-                    return buttonNum;
+                if (buttonNum >= 1 && buttonNum <= Mouse.getButtonCount()) {
+                    return buttonNum - 1;
                 }
             } catch (NumberFormatException | StringIndexOutOfBoundsException e) {
             }
@@ -126,21 +126,21 @@ public class BindCommand extends Command {
             case "SCROLLCLICK":
                 return 2;
             case "MOUSE3":
+                return 2;
             case "XBUTTON1":
             case "SIDEBUTTON1":
             case "BOTTOMSIDE":
-                return 3;
             case "MOUSE4":
+                return 3;
             case "XBUTTON2":
             case "SIDEBUTTON2":
             case "TOPSIDE":
-                return 4;
             case "MOUSE5":
-                return 5;
+                return 4;
             case "MOUSE6":
-                return 6;
+                return 5;
             case "MOUSE7":
-                return 7;
+                return 6;
             default:
                 return -1;
         }

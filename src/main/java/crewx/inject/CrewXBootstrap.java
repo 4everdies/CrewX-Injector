@@ -35,12 +35,14 @@ public final class CrewXBootstrap {
 
     // Called synchronously by ClassFileLoadHook with the bytes supplied by the JVM.
     public static byte[] transformForInjection(Class<?> target, String className, byte[] original) {
-        byte[] named = (NotchMappings.isNotch() || NotchMappings.isCheatBreaker())
+        byte[] named = (NotchMappings.isNotch() || NotchMappings.isCheatBreaker()
+                || NotchMappings.isCmpack())
                 ? NotchMappings.toNamed(original)
                 : NotchMappings.isSrg() ? NotchMappings.srgToNamed(original) : original;
         byte[] patched = CrewXRuntimeTransformer.transform(className.replace('.', '/'), named);
         if (patched == null) return null;
-        if (NotchMappings.isNotch() || NotchMappings.isCheatBreaker())
+        if (NotchMappings.isNotch() || NotchMappings.isCheatBreaker()
+                || NotchMappings.isCmpack())
             patched = NotchMappings.toNotch(patched);
         else if (NotchMappings.isSrg()) patched = NotchMappings.namedToSrg(patched);
         PENDING_HOOKS.put(target, new byte[][] {original, patched});
@@ -89,6 +91,7 @@ public final class CrewXBootstrap {
             "net.minecraft.block.BlockPane",
             "net.minecraft.block.BlockWeb",
             "net.minecraft.client.renderer.BlockRendererDispatcher",
+            "crewx.module.modules.misc.BedNuker",
     };
 
     private CrewXBootstrap() {
@@ -147,11 +150,14 @@ public final class CrewXBootstrap {
             final boolean[] success = new boolean[1];
             Runnable task = new Runnable() {
                 @Override public void run() {
+                    ClassLoader previous = Thread.currentThread().getContextClassLoader();
+                    Thread.currentThread().setContextClassLoader(CrewXBootstrap.class.getClassLoader());
                     try {
                         success[0] = unloadOnClientThread();
                     } catch (Throwable error) {
                         log("unload FAILED: " + describeFailure(error));
                     } finally {
+                        Thread.currentThread().setContextClassLoader(previous);
                         done.countDown();
                     }
                 }
@@ -254,6 +260,8 @@ public final class CrewXBootstrap {
             Object task = (Runnable) new Runnable() {
                 @Override
                 public void run() {
+                    ClassLoader previous = Thread.currentThread().getContextClassLoader();
+                    Thread.currentThread().setContextClassLoader(CrewXBootstrap.class.getClassLoader());
                     try {
 
 
@@ -269,6 +277,7 @@ public final class CrewXBootstrap {
                     } catch (Throwable error) {
                         log("client-thread init FAILED: " + describeFailure(error));
                     } finally {
+                        Thread.currentThread().setContextClassLoader(previous);
                         done.countDown();
                     }
                 }
@@ -336,6 +345,11 @@ public final class CrewXBootstrap {
             loader = CrewXBootstrap.class.getClassLoader();
         }
         for (String className : RUNTIME_HOOK_TARGETS) {
+            if (NotchMappings.isCmpack() && !CmpackMappings.get().namedToObf
+                    .containsKey(className.replace('.', '/'))) {
+                log("hook SKIP " + className + ": not present in the CMPack profile");
+                continue;
+            }
             try {
                 Class<?> target = Class.forName(NotchMappings.className(className), false, loader);
                 int result = CrewXNative.trc(target, className);
@@ -410,7 +424,8 @@ public final class CrewXBootstrap {
     }
 
     private static void verifyHookBridge() throws Exception {
-        ClassLoader loader = Thread.currentThread().getContextClassLoader();
+        ClassLoader loader = CrewXBootstrap.class.getClassLoader();
+        if (loader == null) loader = Thread.currentThread().getContextClassLoader();
         Class<?> bridge = Class.forName("crewx.inject.CrewXRuntimeHooks", true, loader);
         bridge.getMethod("onTickPre", Object.class);
         log("tick hook bridge visible to " + describeLoader(loader));

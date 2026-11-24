@@ -201,6 +201,14 @@ public final class CrewXRuntimeHooks {
     private static final boolean[] consumedMouseButtons = new boolean[32];
     private static final boolean[] consumedKeyboardButtons = new boolean[256];
     private static final long[] keyboardDispatchTick = new long[256];
+    private static final boolean[] mouseFixButtons = new boolean[8];
+    private static final boolean MOUSE_FIX_WINDOWS = System.getProperty("os.name", "")
+            .toLowerCase(java.util.Locale.ROOT).contains("win");
+    private static volatile Object mouseFixUser32;
+    private static volatile Method mouseFixGetAsyncKeyState;
+    private static volatile boolean mouseFixLookupFailed;
+    private static volatile boolean mouseFixSuccessLogged;
+    private static volatile boolean mouseFixFailureLogged;
     private static boolean unintendedMovementLogged;
     private static volatile Field itemToRenderField;
     private static volatile Field equippedProgressField;
@@ -228,6 +236,7 @@ public final class CrewXRuntimeHooks {
         java.util.Arrays.fill(consumedMouseButtons, false);
         java.util.Arrays.fill(consumedKeyboardButtons, false);
         java.util.Arrays.fill(keyboardDispatchTick, 0L);
+        java.util.Arrays.fill(mouseFixButtons, false);
         unintendedMovementLogged = false;
         firstMoveInputSeen = false;
     }
@@ -543,17 +552,30 @@ public final class CrewXRuntimeHooks {
         try {
             int mouseButton = keyCode + 100;
             if (keyCode < 0 && mouseButton >= 0 && mouseButton < mouseButtons.length) {
+                boolean cmpack = cmpackMouseHandling();
+                boolean down = cmpack ? physicalMouseDown(keyCode) : Mouse.isButtonDown(mouseButton);
                 if (consumedMouseButtons[mouseButton]) {
-                    boolean down = Mouse.isButtonDown(mouseButton);
                     consumedMouseButtons[mouseButton] = down;
                     mouseButtons[mouseButton] = down;
                     return;
                 }
                 if (!pressed) {
-                    mouseButtons[mouseButton] = false;
+                    // CMPack also reports releases for buttons that are still held. Only the real
+                    // release clears the latch; the physical poll is the final safety net.
+                    if (!cmpack || !down) {
+                        mouseButtons[mouseButton] = false;
+                    }
                     return;
                 }
-                if (mouseButtons[mouseButton]) return;
+                if (cmpack && !down) {
+                    if (hasMouseBind(keyCode) && (keyCode == -96 || keyCode == -97)) {
+                        CrewXBootstrap.log("mouse phantom press ignored: " + keyCode);
+                    }
+                    return;
+                }
+                if (mouseButtons[mouseButton]) {
+                    return;
+                }
                 mouseButtons[mouseButton] = true;
             }
             if (keyCode > 0 && keyCode < keyboardButtons.length) {
@@ -584,6 +606,14 @@ public final class CrewXRuntimeHooks {
             }
             EventManager.call(new KeyEvent(keyCode));
             keyCount++;
+            if (keyCode < 0) {
+                Module bound = mouseBindModule(keyCode);
+                if (bound != null) {
+                    CrewXBootstrap.log("mouse bind dispatch: " + keyCode
+                            + " module=" + bound.getName()
+                            + " enabled=" + bound.isEnabled());
+                }
+            }
         } catch (Throwable ignored) {
 
         }
@@ -596,6 +626,49 @@ public final class CrewXRuntimeHooks {
 
 
     public static void onKeyDispatch(int keyCode, boolean pressed) {
+        if (keyCode < 0 && cmpackMouseHandling()) {
+            keyCode = correctMouseKey(keyCode, pressed);
+            int button = keyCode + 100;
+            boolean physical = physicalMouseDown(keyCode);
+            boolean crewxMouseBind = hasMouseBind(keyCode);
+            boolean hotbarMouseBind = isHotbarMouseBind(keyCode);
+            if (crewxMouseBind || hotbarMouseBind) {
+                if (pressed && !physical) {
+                    // CMPack repeats side-button presses (mostly while sneaking or using an
+                    // item) without the button being down. Those must not toggle a module or
+                    // select a hotbar slot.
+                    if (keyCode == -96 || keyCode == -97) {
+                        CrewXBootstrap.log("mouse phantom press ignored: " + keyCode
+                                + " crewx=" + crewxMouseBind + " hotbar=" + hotbarMouseBind);
+                    }
+                    return;
+                }
+                if (crewxMouseBind) {
+                    if (pressed && (keyCode == -96 || keyCode == -97)) {
+                        CrewXBootstrap.log("mouse press consumed: " + keyCode
+                                + " crewx=true hotbar=" + hotbarMouseBind);
+                    }
+                    onKey(keyCode, pressed);
+                    return;
+                }
+                // Bound only to a hotbar slot: the physical press keeps working normally.
+                if (pressed && (keyCode == -96 || keyCode == -97)) {
+                    CrewXBootstrap.log("mouse press consumed: " + keyCode
+                            + " crewx=false hotbar=true");
+                }
+                if (pressed && physical) {
+                    // CMPack only runs the vanilla hotbar tick inside its use-item handling,
+                    // so a bare side-button press would never select the slot on its own.
+                    selectHotbarSlot(Minecraft.getMinecraft(), keyCode);
+                }
+                try {
+                    net.minecraft.client.settings.KeyBinding.setKeyBindState(keyCode, pressed);
+                } catch (Throwable ignored) {
+
+                }
+                return;
+            }
+        }
         try {
             net.minecraft.client.settings.KeyBinding.setKeyBindState(keyCode, pressed);
         } catch (Throwable ignored) {
@@ -604,11 +677,229 @@ public final class CrewXRuntimeHooks {
         onKey(keyCode, pressed);
     }
 
+    /**
+     * CMPack calls KeyBinding.onTick right after setKeyBindState for mouse events. The tick is what
+     * bumps the hotbar binding's press counter, so a CrewX side-button bind would also select slot 9.
+     * Keep the vanilla tick for normal keys and swallow it for mouse codes owned by CrewX.
+     */
+    public static void onKeyTick(int keyCode) {
+        try {
+            if (keyCode < 0 && cmpackMouseHandling()) {
+                int button = keyCode + 100;
+                boolean bound = hasMouseBind(keyCode);
+                boolean hotbar = isHotbarMouseBind(keyCode);
+                boolean consumed = button >= 0 && button < consumedMouseButtons.length
+                        && consumedMouseButtons[button];
+                boolean physical = physicalMouseDown(keyCode);
+                if (bound || consumed || hotbar) {
+                    if (hotbar && (keyCode == -96 || keyCode == -97)) {
+                        CrewXBootstrap.log("mouse tick suppressed: " + keyCode
+                                + " crewx=" + bound + " hotbar=" + hotbar
+                                + " physical=" + physical);
+                    }
+                    return;
+                }
+            }
+            net.minecraft.client.settings.KeyBinding.onTick(keyCode);
+        } catch (Throwable ignored) {
+
+        }
+    }
+
+    /**
+     * CMPack needs the physical-button workarounds because it repeats side-button events and
+     * only runs the hotbar tick inside its use-item handling. Other clients keep vanilla input.
+     */
+    private static boolean cmpackMouseHandling() {
+        try {
+            return NotchMappings.isCmpack();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * LWJGL 2 reports a physical Mouse 4 as Mouse 5 while Shift, Ctrl or another mouse
+     * button is held (MC-40227). Resolve the real side button before the code reaches the
+     * bind table; otherwise a back-button press can be consumed as hotbar slot 9.
+     */
+    private static int correctMouseKey(int keyCode, boolean pressed) {
+        if (keyCode != -96 && keyCode != -97) return keyCode;
+        int reported = keyCode + 100;
+        int physical = physicalSideButton();
+        int corrected;
+        if (physical == 3 || physical == 4) {
+            corrected = physical;
+        } else if (!pressed && mouseFixButtons[3] != mouseFixButtons[4]) {
+            corrected = mouseFixButtons[3] ? 3 : 4;
+        } else if (reported == 4 && mouseFixModifierHeld()) {
+            corrected = 3;
+        } else {
+            corrected = reported;
+        }
+        mouseFixButtons[corrected] = pressed;
+        if (corrected != reported) {
+            CrewXBootstrap.log("mouse corrected: " + keyCode + " -> " + (corrected - 100)
+                    + " physical=" + physical + " pressed=" + pressed);
+        }
+        return corrected - 100;
+    }
+
+    /** True when the real side button for this code is down (filters CMPack repeats). */
+    private static boolean physicalMouseDown(int keyCode) {
+        int button = keyCode + 100;
+        if (button < 0 || button >= mouseButtons.length) return false;
+        if (button == 3 || button == 4) {
+            int physical = physicalSideButton();
+            if (physical >= 0) return physical == button;
+        }
+        return Mouse.isButtonDown(button);
+    }
+
+    /** 3 = Mouse 4, 4 = Mouse 5, 0 = neither down, -1 = unknown/unavailable. */
+    private static int physicalSideButton() {
+        if (!MOUSE_FIX_WINDOWS) return -1;
+        try {
+            Object user32 = mouseFixInstance();
+            if (user32 == null) return -1;
+            boolean mouse4 = mouseFixKeyDown(user32, 0x05); // VK_XBUTTON1
+            boolean mouse5 = mouseFixKeyDown(user32, 0x06); // VK_XBUTTON2
+            if (mouse4 && !mouse5) return 3;
+            if (mouse5 && !mouse4) return 4;
+            if (!mouse4 && !mouse5) return 0;
+            return -1;
+        } catch (Throwable error) {
+            if (!mouseFixFailureLogged) {
+                mouseFixFailureLogged = true;
+                CrewXBootstrap.log("mouse fix native FAILED: "
+                        + CrewXBootstrap.describeFailure(error));
+            }
+            return -1;
+        }
+    }
+
+    private static Object mouseFixInstance() {
+        Object instance = mouseFixUser32;
+        if (instance != null || mouseFixLookupFailed) return instance;
+        synchronized (CrewXRuntimeHooks.class) {
+            if (mouseFixUser32 != null || mouseFixLookupFailed) return mouseFixUser32;
+            try {
+                Class<?> type = Class.forName("com.sun.jna.platform.win32.User32");
+                Object value = type.getField("INSTANCE").get(null);
+                mouseFixGetAsyncKeyState = type.getMethod("GetAsyncKeyState", int.class);
+                mouseFixUser32 = value;
+                if (!mouseFixSuccessLogged) {
+                    mouseFixSuccessLogged = true;
+                    CrewXBootstrap.log("mouse fix native: JNA GetAsyncKeyState available");
+                }
+                return value;
+            } catch (Throwable error) {
+                mouseFixLookupFailed = true;
+                if (!mouseFixFailureLogged) {
+                    mouseFixFailureLogged = true;
+                    CrewXBootstrap.log("mouse fix native unavailable: "
+                            + CrewXBootstrap.describeFailure(error));
+                }
+                return null;
+            }
+        }
+    }
+
+    private static boolean mouseFixKeyDown(Object user32, int virtualKey) throws Exception {
+        Method method = mouseFixGetAsyncKeyState;
+        if (method == null) return false;
+        Object state = method.invoke(user32, virtualKey);
+        return state instanceof Number && (((Number) state).intValue() & 0x8000) != 0;
+    }
+
+    private static boolean mouseFixModifierHeld() {
+        return org.lwjgl.input.Keyboard.isKeyDown(org.lwjgl.input.Keyboard.KEY_LSHIFT)
+                || org.lwjgl.input.Keyboard.isKeyDown(org.lwjgl.input.Keyboard.KEY_RSHIFT)
+                || org.lwjgl.input.Keyboard.isKeyDown(org.lwjgl.input.Keyboard.KEY_LCONTROL)
+                || org.lwjgl.input.Keyboard.isKeyDown(org.lwjgl.input.Keyboard.KEY_RCONTROL)
+                || org.lwjgl.input.Keyboard.isKeyDown(org.lwjgl.input.Keyboard.KEY_LMENU)
+                || org.lwjgl.input.Keyboard.isKeyDown(org.lwjgl.input.Keyboard.KEY_RMENU);
+    }
+
+    /** True when a vanilla hotbar slot is bound to this mouse code. */
+    private static boolean isHotbarMouseBind(int keyCode) {
+        try {
+            Minecraft mc = Minecraft.getMinecraft();
+            if (mc == null || mc.gameSettings == null) return false;
+            net.minecraft.client.settings.KeyBinding[] hotbar = mc.gameSettings.keyBindsHotbar;
+            if (hotbar == null) return false;
+            for (net.minecraft.client.settings.KeyBinding binding : hotbar) {
+                if (binding != null && binding.getKeyCode() == keyCode) return true;
+            }
+        } catch (Throwable ignored) {
+
+        }
+        return false;
+    }
+
+    /**
+     * Select the hotbar slot bound to this mouse code. CMPack only applies the vanilla hotbar
+     * tick while it is processing a use-item press, so a side button on its own never changes
+     * the slot. Setting currentItem mirrors what Minecraft.processKeyBinds does.
+     */
+    private static void selectHotbarSlot(Minecraft mc, int keyCode) {
+        try {
+            if (mc == null || mc.thePlayer == null || mc.gameSettings == null
+                    || mc.currentScreen != null) {
+                return;
+            }
+            net.minecraft.client.settings.KeyBinding[] hotbar = mc.gameSettings.keyBindsHotbar;
+            if (hotbar == null) return;
+            for (int i = 0; i < hotbar.length; i++) {
+                if (hotbar[i] != null && hotbar[i].getKeyCode() == keyCode) {
+                    if (mc.thePlayer.inventory.currentItem != i) {
+                        mc.thePlayer.inventory.currentItem = i;
+                        CrewXBootstrap.log("mouse hotbar select: " + keyCode + " slot=" + (i + 1));
+                    }
+                    return;
+                }
+            }
+        } catch (Throwable ignored) {
+
+        }
+    }
+
+    /** True when a module (or a module setting) is bound to this mouse code. */
+    private static boolean hasMouseBind(int keyCode) {
+        return mouseBindModule(keyCode) != null;
+    }
+
+    private static Module mouseBindModule(int keyCode) {
+        try {
+            if (CrewX.moduleManager == null) return null;
+            for (Object value : CrewX.moduleManager.modules.values()) {
+                if (value instanceof Module && ((Module) value).getKey() == keyCode) {
+                    return (Module) value;
+                }
+            }
+        } catch (Throwable ignored) {
+
+        }
+        return null;
+    }
+
     private static void pollMouseBinds(Minecraft mc) {
         try {
+            boolean cmpack = cmpackMouseHandling();
             int count = Math.min(Mouse.getButtonCount(), mouseButtons.length);
             for (int button = 0; button < count; button++) {
-                boolean down = Mouse.isButtonDown(button);
+                boolean down;
+                if (cmpack && (button == 3 || button == 4)) {
+                    int physical = physicalSideButton();
+                    down = physical >= 0 ? physical == button : Mouse.isButtonDown(button);
+                } else {
+                    down = Mouse.isButtonDown(button);
+                }
+                if (cmpack && down != mouseButtons[button] && (button == 3 || button == 4)) {
+                    CrewXBootstrap.log("mouse physical: button=" + button + " down=" + down
+                            + " screen=" + (mc.currentScreen == null ? "<none>"
+                                    : mc.currentScreen.getClass().getName()));
+                }
                 if (consumedMouseButtons[button]) {
                     consumedMouseButtons[button] = down;
                     mouseButtons[button] = down;
@@ -616,7 +907,7 @@ public final class CrewXRuntimeHooks {
                 }
                 if (down && !mouseButtons[button] && mc.currentScreen == null) {
                     CrewXAudit.mark("mouse-bind-" + button);
-                    onKey(button - 100, true);
+                    onKey(cmpack ? correctMouseKey(button - 100, true) : button - 100, true);
                 }
                 mouseButtons[button] = down;
             }
@@ -1183,6 +1474,9 @@ public final class CrewXRuntimeHooks {
             boolean checkSides) {
         try {
             if (crewx.CrewX.moduleManager == null) return null;
+            // CMPack has no BlockRendererDispatcher.renderBlock hook; collect beds/Xray
+            // blocks from the model renderer, which is available on every client.
+            onBlockRendered(state, position);
             crewx.module.modules.render.Xray xray =
                     (crewx.module.modules.render.Xray) crewx.CrewX.moduleManager.modules.get(
                             crewx.module.modules.render.Xray.class);

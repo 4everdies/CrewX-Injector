@@ -166,6 +166,9 @@ public final class CrewXRuntimeTransformer implements Opcodes {
                 case "net/minecraft/client/renderer/BlockRendererDispatcher":
                     patched = transformBlockRendererDispatcher(original);
                     break;
+                case "crewx/module/modules/misc/BedNuker":
+                    patched = transformBedNuker(original);
+                    break;
                 default:
                     return null;
             }
@@ -443,6 +446,7 @@ public final class CrewXRuntimeTransformer implements Opcodes {
         final boolean[] resize = new boolean[1];
         final int[] gameLoopTickCalls = new int[1];
         final int[] keyDispatchCalls = new int[1];
+        final int[] keyTickCalls = new int[1];
         final int[] displayUpdateCalls = new int[1];
         byte[] current = rewrite(original, output -> new ClassVisitor(ASM9, output) {
             @Override
@@ -497,6 +501,15 @@ public final class CrewXRuntimeTransformer implements Opcodes {
                                 keyDispatchCalls[0]++;
                                 super.visitMethodInsn(INVOKESTATIC, HOOKS, "onKeyDispatch",
                                         "(IZ)V", false);
+                                return;
+                            }
+                            if (opcode == INVOKESTATIC
+                                    && "net/minecraft/client/settings/KeyBinding".equals(owner)
+                                    && "onTick".equals(name)
+                                    && "(I)V".equals(descriptor)) {
+                                keyTickCalls[0]++;
+                                super.visitMethodInsn(INVOKESTATIC, HOOKS, "onKeyTick",
+                                        "(I)V", false);
                                 return;
                             }
                             if (opcode == INVOKEVIRTUAL
@@ -596,7 +609,8 @@ public final class CrewXRuntimeTransformer implements Opcodes {
         }
         CrewXBootstrap.log("transform: Minecraft runGameLoop calls runTick "
                 + gameLoopTickCalls[0] + " time(s); key dispatch sites="
-                + keyDispatchCalls[0] + "; display update sites=" + displayUpdateCalls[0]);
+                + keyDispatchCalls[0] + "; key tick sites=" + keyTickCalls[0]
+                + "; display update sites=" + displayUpdateCalls[0]);
         if (!click[0] || !rightClick[0] || !loadWorld[0] || !hitBlock[0] || !resize[0]) {
             CrewXBootstrap.log("transform: Minecraft partial (click=" + click[0]
                     + " right=" + rightClick[0] + " load=" + loadWorld[0]
@@ -1116,22 +1130,62 @@ public final class CrewXRuntimeTransformer implements Opcodes {
 
 
 
+    private static boolean isRenderEntitiesCall(String owner, String name, String descriptor) {
+        if (!"net/minecraft/client/renderer/RenderGlobal".equals(owner)) return false;
+        return "renderEntities".equals(name)
+                || "(Lnet/minecraft/entity/Entity;Lnet/minecraft/client/renderer/culling/ICamera;F)V"
+                        .equals(descriptor);
+    }
+
     private static byte[] transformEntityRenderer(byte[] original) {
         final boolean[] hooked = new boolean[1];
         final boolean[] pick = new boolean[1];
         final boolean[] ray = new boolean[1];
         final int[] d0Index = new int[]{-1};
+        final boolean[] hasRenderHand = new boolean[1];
+        final boolean[] fallbackUsed = new boolean[1];
+        final String[] fallbackMethod = new String[]{null};
+        final int[] fallbackCallCount = new int[]{0};
         try {
             ClassReader probe = new ClassReader(original);
             probe.accept(new ClassVisitor(ASM9) {
                 @Override
-                public MethodVisitor visitMethod(int access, String name, String descriptor,
-                                                     String signature, String[] exceptions) {
-                    if (!"getMouseOver".equals(name) || !"(F)V".equals(descriptor)) {
-                        return super.visitMethod(access, name, descriptor, signature, exceptions);
+                public org.objectweb.asm.FieldVisitor visitField(int access, String name,
+                        String descriptor, String signature, Object value) {
+                    if ("renderHand".equals(name) && "Z".equals(descriptor)) {
+                        hasRenderHand[0] = true;
                     }
-                    return new MethodVisitor(ASM9,
-                            super.visitMethod(access, name, descriptor, signature, exceptions)) {
+                    return super.visitField(access, name, descriptor, signature, value);
+                }
+
+                @Override
+                public MethodVisitor visitMethod(int access, final String name, String descriptor,
+                                                     String signature, String[] exceptions) {
+                    MethodVisitor base = super.visitMethod(access, name, descriptor, signature, exceptions);
+                    if ("(IFJ)V".equals(descriptor)) {
+                        final int[] calls = new int[1];
+                        return new MethodVisitor(ASM9, base) {
+                            @Override
+                            public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                        String methodDescriptor, boolean itf) {
+                                if (isRenderEntitiesCall(owner, methodName, methodDescriptor)) calls[0]++;
+                                super.visitMethodInsn(opcode, owner, methodName, methodDescriptor, itf);
+                            }
+
+                            @Override
+                            public void visitEnd() {
+                                if (calls[0] > fallbackCallCount[0]) {
+                                    fallbackCallCount[0] = calls[0];
+                                    fallbackMethod[0] = name;
+                                }
+                                super.visitEnd();
+                            }
+                        };
+                    }
+                    if (!"getMouseOver".equals(name) || !"(F)V".equals(descriptor)) {
+                        return base;
+                    }
+                    return new MethodVisitor(ASM9, base) {
                         @Override
                         public void visitLocalVariable(String varName, String varDesc,
                                                        String varSig, Label start, Label end,
@@ -1181,25 +1235,47 @@ public final class CrewXRuntimeTransformer implements Opcodes {
                         }
                     };
                 }
-                if ("renderWorldPass".equals(name) && "(IFJ)V".equals(descriptor)) {
-
-
-                    return new MethodVisitor(ASM9, base) {
-                        @Override
-                        public void visitFieldInsn(int opcode, String owner, String name,
-                                                   String descriptor) {
-                            if (opcode == GETFIELD
-                                    && "net/minecraft/client/renderer/EntityRenderer"
-                                            .equals(owner)
-                                    && "renderHand".equals(name)
-                                    && "Z".equals(descriptor)) {
-                                hooked[0] = true;
-                                mv.visitVarInsn(FLOAD, 2);
-                                callHook(mv, "onRenderWorld", "(F)V");
+                if ("(IFJ)V".equals(descriptor)) {
+                    if (hasRenderHand[0]) {
+                        return new MethodVisitor(ASM9, base) {
+                            @Override
+                            public void visitFieldInsn(int opcode, String owner, String name,
+                                                       String descriptor) {
+                                if (opcode == GETFIELD
+                                        && "net/minecraft/client/renderer/EntityRenderer"
+                                                .equals(owner)
+                                        && "renderHand".equals(name)
+                                        && "Z".equals(descriptor)) {
+                                    hooked[0] = true;
+                                    mv.visitVarInsn(FLOAD, 2);
+                                    callHook(mv, "onRenderWorld", "(F)V");
+                                }
+                                super.visitFieldInsn(opcode, owner, name, descriptor);
                             }
-                            super.visitFieldInsn(opcode, owner, name, descriptor);
-                        }
-                    };
+                        };
+                    }
+                    if (fallbackMethod[0] != null && name.equals(fallbackMethod[0])
+                            && fallbackCallCount[0] > 0) {
+                        final int totalCalls = fallbackCallCount[0];
+                        final int[] seenCalls = new int[1];
+                        return new MethodVisitor(ASM9, base) {
+                            @Override
+                            public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                        String methodDescriptor, boolean itf) {
+                                super.visitMethodInsn(opcode, owner, methodName,
+                                        methodDescriptor, itf);
+                                if (isRenderEntitiesCall(owner, methodName, methodDescriptor)) {
+                                    seenCalls[0]++;
+                                    if (seenCalls[0] == totalCalls) {
+                                        hooked[0] = true;
+                                        fallbackUsed[0] = true;
+                                        mv.visitVarInsn(FLOAD, 2);
+                                        callHook(mv, "onRenderWorld", "(F)V");
+                                    }
+                                }
+                            }
+                        };
+                    }
                 }
                 if (("updateFogColor".equals(name)
                         || "setupFog".equals(name)
@@ -1224,8 +1300,14 @@ public final class CrewXRuntimeTransformer implements Opcodes {
             }
         });
         if (!hooked[0]) {
-            CrewXBootstrap.log("transform: renderHand read not found in EntityRenderer.renderWorldPass");
-            return null;
+            CrewXBootstrap.log("transform: onRenderWorld not hooked in EntityRenderer"
+                    + " (renderHand=" + hasRenderHand[0]
+                    + " fallbackMethod=" + fallbackMethod[0]
+                    + " renderEntitiesCalls=" + fallbackCallCount[0] + ")");
+        } else if (fallbackUsed[0]) {
+            CrewXBootstrap.log("transform: onRenderWorld fallback after "
+                    + fallbackCallCount[0] + " renderEntities call(s) in EntityRenderer."
+                    + fallbackMethod[0]);
         }
         current = rewrite(current, output -> new ClassVisitor(ASM9, output) {
             @Override
@@ -1362,6 +1444,39 @@ public final class CrewXRuntimeTransformer implements Opcodes {
             @Override String hookName() { return "onDrawButton"; }
             @Override String hookDescriptor() { return "(Ljava/lang/Object;II)Z"; }
         });
+    }
+
+    private static byte[] transformBedNuker(byte[] original) {
+        final boolean[] fixed = new boolean[1];
+        byte[] current = rewrite(original, output -> new ClassVisitor(ASM9, output) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                             String signature, String[] exceptions) {
+                MethodVisitor base = super.visitMethod(access, name, descriptor, signature, exceptions);
+                return new MethodVisitor(ASM9, base) {
+                    @Override
+                    public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                String methodDesc, boolean isInterface) {
+                        if (opcode == INVOKEVIRTUAL
+                                && "net/minecraft/item/Item".equals(owner)
+                                && "getDigSpeed".equals(methodName)
+                                && "(Lnet/minecraft/item/ItemStack;Lnet/minecraft/block/state/IBlockState;)F".equals(methodDesc)) {
+                            fixed[0] = true;
+                            mv.visitMethodInsn(INVOKEINTERFACE,
+                                    "net/minecraft/block/state/IBlockState", "getBlock",
+                                    "()Lnet/minecraft/block/Block;", true);
+                            mv.visitMethodInsn(INVOKEVIRTUAL, "net/minecraft/item/Item",
+                                    "getStrVsBlock",
+                                    "(Lnet/minecraft/item/ItemStack;Lnet/minecraft/block/Block;)F", false);
+                            return;
+                        }
+                        super.visitMethodInsn(opcode, owner, methodName, methodDesc, isInterface);
+                    }
+                };
+            }
+        });
+        if (!fixed[0]) CrewXBootstrap.log("transform: BedNuker getDigSpeed call not found");
+        return fixed[0] ? current : null;
     }
 
     private static byte[] transformWorld(byte[] original) {

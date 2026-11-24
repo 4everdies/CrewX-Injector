@@ -221,7 +221,9 @@ public class RenderUtil {
         GlStateManager.color(red, green, blue, alpha);
         boolean bl = RenderUtil.mc.gameSettings.viewBobbing;
         RenderUtil.mc.gameSettings.viewBobbing = false;
-        ((IAccessorEntityRenderer) RenderUtil.mc.entityRenderer).callSetupCameraTransform(WorldRenderPass.partialTicks(), 2);
+        if (!CameraMatrices.applyWorldPass()) {
+            ((IAccessorEntityRenderer) RenderUtil.mc.entityRenderer).callSetupCameraTransform(WorldRenderPass.partialTicks(), 2);
+        }
         RenderUtil.mc.gameSettings.viewBobbing = bl;
         GL11.glLineWidth(lineWidth);
         GL11.glEnable(GL11.GL_LINE_SMOOTH);

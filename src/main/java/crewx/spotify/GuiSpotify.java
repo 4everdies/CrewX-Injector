@@ -39,7 +39,10 @@ public final class GuiSpotify extends GuiScreen {
         search = new GuiTextField(2, fontRendererObj, width / 2 - 145, 43, 240, 20); search.setMaxStringLength(120);
         rebuildButtons();
         if (service.isConfigured()) mc.addScheduledTask(() -> {
-            if (mc.currentScreen == this) mc.displayGuiScreen(new SpotifyWebScreen(parent, service));
+            if (mc.currentScreen == this && SpotifyWebLauncher.open(mc, parent, service)
+                    && mc.currentScreen == this) {
+                mc.displayGuiScreen(parent);
+            }
         });
     }
 
@@ -116,8 +119,14 @@ public final class GuiSpotify extends GuiScreen {
             service.setClientId(clientId.getText()); status = "Aguardando autorizacao no navegador...";
             SpotifyAuth.connect(service, error -> mc.addScheduledTask(() -> {
                 if (mc.currentScreen != this) return;
-                if (error == null) mc.displayGuiScreen(new SpotifyWebScreen(parent, service));
-                else { status = "Erro: " + error; rebuildButtons(); }
+                if (error == null) {
+                    if (SpotifyWebLauncher.open(mc, parent, service)) {
+                        if (mc.currentScreen == this) mc.displayGuiScreen(parent);
+                    } else {
+                        status = "Nao foi possivel abrir a interface web";
+                        rebuildButtons();
+                    }
+                } else { status = "Erro: " + error; rebuildButtons(); }
             })); return;
         }
         if (button.id == 3) { service.disconnect(); playback = null; status = "Desconectado"; rebuildButtons(); return; }

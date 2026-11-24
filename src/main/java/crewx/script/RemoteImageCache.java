@@ -52,6 +52,8 @@ public final class RemoteImageCache {
         volatile State state = State.LOADING;
         volatile ResourceLocation texture;
         volatile String error;
+        volatile int width;
+        volatile int height;
 
         Entry(String key, String url) {
             this.key = key;
@@ -113,6 +115,18 @@ public final class RemoteImageCache {
         return entry != null && entry.state == State.READY ? entry.texture : null;
     }
 
+    public static int textureWidth(String rawKey) {
+        String key = normalizeKey(rawKey);
+        Entry entry = key == null ? null : entries.get(key);
+        return entry == null ? 0 : entry.width;
+    }
+
+    public static int textureHeight(String rawKey) {
+        String key = normalizeKey(rawKey);
+        Entry entry = key == null ? null : entries.get(key);
+        return entry == null ? 0 : entry.height;
+    }
+
     public static boolean remove(String rawKey) {
         String key = normalizeKey(rawKey);
         if (key == null) return false;
@@ -139,6 +153,8 @@ public final class RemoteImageCache {
                     || image.getWidth() > MAX_DIMENSION || image.getHeight() > MAX_DIMENSION) {
                 throw new IllegalArgumentException("image dimensions exceed " + MAX_DIMENSION + "px");
             }
+            entry.width = image.getWidth();
+            entry.height = image.getHeight();
 
             mc.addScheduledTask(() -> {
                 if (entries.get(entry.key) != entry) {

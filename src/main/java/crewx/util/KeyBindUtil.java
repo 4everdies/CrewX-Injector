@@ -16,15 +16,15 @@ public class KeyBindUtil {
                 case 2:
                     return "MMB";
                 case 3:
-                    return "MOUSE3";
-                case 4:
                     return "MOUSE4";
-                case 5:
+                case 4:
                     return "MOUSE5";
-                case 6:
+                case 5:
                     return "MOUSE6";
-                case 7:
+                case 6:
                     return "MOUSE7";
+                case 7:
+                    return "MOUSE8";
                 default:
                     String buttonName = Mouse.getButtonName(mouseButton);
                     return buttonName != null ? buttonName : "MOUSE" + mouseButton;

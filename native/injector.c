@@ -77,6 +77,25 @@ static int absolute_existing_file(
             && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
+static void stage_cmpack_profile(const wchar_t *directory) {
+    wchar_t executable[MAX_PATH];
+    wchar_t source[MAX_PATH];
+    wchar_t target[MAX_PATH];
+    wchar_t *separator;
+    DWORD length = GetModuleFileNameW(NULL, executable, MAX_PATH);
+    DWORD attributes;
+    if (length == 0 || length >= MAX_PATH) return;
+    separator = wcsrchr(executable, L'\\');
+    if (separator == NULL) return;
+    *separator = L'\0';
+    if (swprintf_s(source, MAX_PATH, L"%ls\\cmpack-mappings.json", executable) < 0) return;
+    attributes = GetFileAttributesW(source);
+    if (attributes == INVALID_FILE_ATTRIBUTES
+            || (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) return;
+    if (swprintf_s(target, MAX_PATH, L"%ls\\cmpack-mappings.json", directory) < 0) return;
+    CopyFileW(source, target, FALSE);
+}
+
 static int stage_embedded_dll(DWORD target_pid, wchar_t *output, DWORD capacity) {
     HRSRC resource = FindResourceW(NULL, MAKEINTRESOURCEW(422), MAKEINTRESOURCEW(10));
     HGLOBAL loaded;
@@ -97,6 +116,7 @@ static int stage_embedded_dll(DWORD target_pid, wchar_t *output, DWORD capacity)
     if (GetTempPathW(MAX_PATH, temp) == 0) return 0;
     if (swprintf_s(directory, MAX_PATH, L"%lsCrewX21", temp) < 0) return 0;
     if (!CreateDirectoryW(directory, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return 0;
+    stage_cmpack_profile(directory);
     if (swprintf_s(output, capacity, L"%ls\\CrewXNative_%lu_%08lx.dll",
             directory, (unsigned long)target_pid, (unsigned long)hash) < 0) return 0;
     file = CreateFileW(output, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_NEW,
