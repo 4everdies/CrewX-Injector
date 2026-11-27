@@ -240,6 +240,23 @@ public final class RemapCrewToNotch {
             }
             String fromParents = inherited(namedOwner, name + " " + descriptor, methods);
             if (fromParents != null) return fromParents;
+            // Ornithe lists these methods on their interfaces, while the Java
+            // bytecode calls them through the concrete Minecraft classes.
+            if (entitySubclass(namedOwner) && "getName".equals(name)
+                    && "()Ljava/lang/String;".equals(descriptor)) {
+                String mapped = methods.get("net/minecraft/command/ICommandSender/getName " + descriptor);
+                if (mapped != null) return mapped;
+            }
+            if (worldSubclass(namedOwner) && "getBlockState".equals(name)
+                    && "(Lnet/minecraft/util/BlockPos;)Lnet/minecraft/block/state/IBlockState;".equals(descriptor)) {
+                String mapped = methods.get("net/minecraft/world/IBlockAccess/getBlockState " + descriptor);
+                if (mapped != null) return mapped;
+            }
+            if ("net/minecraft/client/renderer/culling/Frustum".equals(namedOwner)
+                    && "setPosition".equals(name) && "(DDD)V".equals(descriptor)) {
+                String mapped = methods.get("net/minecraft/client/renderer/culling/ICamera/setPosition " + descriptor);
+                if (mapped != null) return mapped;
+            }
             if ("net/minecraft/util/BlockPos".equals(namedOwner)) {
                 String vectorMethod = methods.get("net/minecraft/util/Vec3i/"
                         + name + " " + descriptor);

@@ -234,7 +234,6 @@ public class DynamicIsland extends Module {
             float barW = width - PAD_LEFT - PAD_RIGHT;
             float barY = y + height - 5.0F;
             int barColor = total > 32 ? accentRGB : total > 8 ? 0xFFFFD45A : 0xFFFF5555;
-            drawRoundedRect(barX, barY, barX + barW, barY + 2.0F, 1.0F, withAlpha(0xFFFFFF, (int) (24 * expand)));
             if (fraction > 0.0F) {
                 drawRoundedRect(barX, barY, barX + Math.max(2.0F, barW * fraction), barY + 2.0F, 1.0F,
                         withAlpha(barColor, (int) (220 * expand)));

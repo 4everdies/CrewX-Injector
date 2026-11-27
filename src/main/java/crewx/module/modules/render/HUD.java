@@ -6,6 +6,7 @@ import crewx.gui.ClientFont;
 import crewx.gui.CategoryIconRenderer;
 import crewx.gui.BindViewer;
 import crewx.clickgui.render.RoundedUtils;
+import crewx.clickgui.clone.mc.TargetHudFont;
 import crewx.module.modules.combat.*;
 import crewx.module.modules.movement.*;
 import crewx.module.modules.render.*;
@@ -55,9 +56,23 @@ public class HUD extends Module {
         float progress;
         float y;
         boolean placed;
+        boolean adjustVisible;
+        long adjustStarted;
+        float adjustStartProgress;
+        long adjustYStarted;
+        float adjustStartY;
+        float adjustTargetY;
     }
-    /** Jello: one small dark box per module, right-aligned stair (as in the reference); Classic: old list. */
-    public final ModeProperty arraylistStyle = new ModeProperty("arraylist-style", 0, new String[]{"Jello", "Classic"});
+    /** Each list keeps its own drawing rules; existing styles retain their saved indices. */
+    public final ModeProperty arraylistStyle = new ModeProperty("arraylist-style", 0, new String[]{"Jello", "Classic", "Adjust"});
+    public final ModeProperty adjustBorder = new ModeProperty("adjust-border", 0,
+            new String[]{"Full", "Right", "None"}, () -> this.arraylistStyle.getValue() == 2);
+    public final ModeProperty adjustColor = new ModeProperty("adjust-color", 0,
+            new String[]{"Default", "Rainbow", "Astolfo", "Random"}, () -> this.arraylistStyle.getValue() == 2);
+    public final ModeProperty adjustPadding = new ModeProperty("adjust-padding", 0,
+            new String[]{"Normal", "Compact"}, () -> this.arraylistStyle.getValue() == 2);
+    public final BooleanProperty adjustBackground = new BooleanProperty("adjust-background", true,
+            () -> this.arraylistStyle.getValue() == 2);
     public final ModeProperty colorMode = new ModeProperty(
             "color", 3, new String[]{"Rainbow", "Chroma", "Astolfo", "Custom1", "Custom2", "Custom3"}
     );
@@ -66,9 +81,9 @@ public class HUD extends Module {
     public final PercentProperty colorSaturation = new PercentProperty("color-saturation", 50);
     public final PercentProperty colorBrightness = new PercentProperty("color-brightness", 100);
     public final ColorProperty custom1 = new ColorProperty("custom-color-1", Color.WHITE.getRGB(),
-            () -> this.colorMode.getValue() >= 3);
+            () -> this.colorMode.getValue() >= 3 || this.arraylistStyle.getValue() == 2);
     public final ColorProperty custom2 = new ColorProperty("custom-color-2", Color.WHITE.getRGB(),
-            () -> this.colorMode.getValue() >= 4);
+            () -> this.colorMode.getValue() >= 4 || this.arraylistStyle.getValue() == 2);
     public final ColorProperty custom3 = new ColorProperty("custom-color-3", Color.WHITE.getRGB(),
             () -> this.colorMode.getValue() == 5);
     public final ModeProperty waveMode = new ModeProperty("wave-mode", 0, new String[]{"None", "Vertical", "Horizontal"});
@@ -154,7 +169,18 @@ public class HUD extends Module {
     }
 
     private int getModuleWidth(Module module) {
+        if (this.arraylistStyle.getValue() == 2) return Math.round(this.getAdjustTextWidth(module));
         return this.calculateStringWidth(this.getModuleName(module), this.getModuleSuffix(module));
+    }
+
+    private float getAdjustTextWidth(Module module) {
+        float width = TargetHudFont.measure(12, this.getModuleName(module));
+        if (this.suffixes.getValue()) {
+            for (String suffix : this.getModuleSuffix(module)) {
+                if (!suffix.isEmpty()) width += TargetHudFont.measure(12, " " + suffix);
+            }
+        }
+        return width;
     }
 
     private int calculateStringWidth(String string, String[] arr) {
@@ -350,6 +376,8 @@ public class HUD extends Module {
         float maxWidth = this.getMaxModuleWidth();
         if (this.arraylistStyle.getValue() == 0) {
             this.drawJelloList(renderOrder, now, delta, screenW, screenH, baseX, baseY, listTopPad, rightAlign, bottomAlign);
+        } else if (this.arraylistStyle.getValue() == 2) {
+            this.drawAdjustList(renderOrder, now, screenW, screenH, baseX, baseY, listTopPad, rightAlign, bottomAlign);
         } else for (Module module : renderOrder) {
             Anim anim = this.anims.get(module);
             if (anim == null || anim.progress <= 0.005F) continue;
@@ -476,6 +504,126 @@ public class HUD extends Module {
         BindViewer.render(this);
         HitchMonitor.section("Bind Viewer", timed);
     }
+    /** Adjust's ToggledEntry geometry: compact rows, translucent #131313 background and connected border. */
+    private void drawAdjustList(List<Module> renderOrder, long now, float screenW, float screenH,
+                                float baseX, float baseY, float listTopPad, boolean rightAlign, boolean bottomAlign) {
+        float rowH = this.adjustPadding.getValue() == 1 ? 7.5F : 8.0F;
+        float rowStep = rowH + this.lineSpacing.getValue();
+        int count = this.activeModules.size();
+        Module previous = null;
+        float previousX = 0.0F;
+        float previousY = 0.0F;
+        float previousWidth = 0.0F;
+        int previousColor = 0;
+        for (Module module : renderOrder) {
+            Anim anim = this.anims.get(module);
+            if (anim == null || anim.progress <= 0.005F) continue;
+            int index = this.activeModules.indexOf(module);
+            String name = this.getModuleName(module);
+            StringBuilder suffix = new StringBuilder();
+            if (this.suffixes.getValue()) {
+                for (String part : this.getModuleSuffix(module)) {
+                    if (!part.isEmpty()) suffix.append(' ').append(part);
+                }
+            }
+            float nameW = TargetHudFont.arrayWidth(name);
+            float width = nameW + TargetHudFont.arrayWidth(suffix.toString());
+            if (index >= 0) {
+                float targetY = bottomAlign
+                        ? screenH - baseY - listTopPad - (count - index) * rowStep
+                        : baseY + listTopPad + index * rowStep;
+                if (!anim.placed) {
+                    anim.y = targetY - 16.0F;
+                    anim.placed = true;
+                    anim.adjustStartY = anim.y;
+                    anim.adjustTargetY = targetY;
+                    anim.adjustYStarted = now;
+                } else if (Math.abs(anim.adjustTargetY - targetY) > 0.01F) {
+                    anim.adjustStartY = anim.y;
+                    anim.adjustTargetY = targetY;
+                    anim.adjustYStarted = now;
+                }
+                anim.y = anim.adjustStartY + (anim.adjustTargetY - anim.adjustStartY)
+                        * easeOutExpo((now - anim.adjustYStarted) / 600.0F);
+            }
+            float x = rightAlign
+                    ? screenW - baseX - width + (1.0F - anim.progress) * (width + 4.0F)
+                    : baseX - (1.0F - anim.progress) * (width + 4.0F);
+            float y = anim.y;
+            int color = this.getAdjustColor(now, y, module);
+            int border = this.adjustBorder.getValue();
+            float edgeX = rightAlign ? x - 3.0F : x + width + 3.0F;
+            RenderUtil.enableRenderState();
+            if (this.adjustBackground.getValue()) {
+                float left = rightAlign ? x - (border == 1 ? 3.5F : 3.0F) : x - 3.0F;
+                float right = rightAlign ? x + width : x + width + (border == 1 ? 3.5F : 3.0F);
+                RenderUtil.drawRect(left, y, right, y + rowH, 0x46131313);
+            }
+            if (border == 0) {
+                RenderUtil.drawRect(edgeX - 0.5F, y, edgeX, y + rowH, color);
+                if (previous != null && Math.abs(previousX - x) > 0.01F) {
+                    float start = rightAlign ? Math.min(previousX - 3.5F, x - 3.5F)
+                            : Math.min(previousX + previousWidth + 3.0F, x + width + 3.0F);
+                    float end = rightAlign ? Math.max(previousX - 3.5F, x - 3.5F)
+                            : Math.max(previousX + previousWidth + 3.0F, x + width + 3.0F);
+                    RenderUtil.drawRect(start, previousY + rowH, end, previousY + rowH + 0.5F, color);
+                }
+            } else if (border == 1) {
+                float bx = rightAlign ? x + width - 0.5F : x - 0.5F;
+                RenderUtil.drawRect(bx, y, bx + 0.5F, y + rowH, color);
+            }
+            RenderUtil.disableRenderState();
+            float textX = x - 1.5F;
+            float textY = y + rowH * 0.5F - 1.5F;
+            TargetHudFont.drawArrayPlain(name, textX, textY, color);
+            if (suffix.length() > 0) {
+                TargetHudFont.drawArrayPlain(suffix.toString(), textX + nameW, textY, 0xFFAAAAAA);
+            }
+            previous = module;
+            previousX = x;
+            previousY = y;
+            previousWidth = width;
+            previousColor = color;
+        }
+        if (previous != null && this.adjustBorder.getValue() == 0) {
+            RenderUtil.enableRenderState();
+            float left = rightAlign ? previousX - 3.5F : previousX - 3.0F;
+            float right = rightAlign ? previousX + previousWidth : previousX + previousWidth + 3.5F;
+            RenderUtil.drawRect(left, previousY + rowH, right, previousY + rowH + 0.5F, previousColor);
+            RenderUtil.disableRenderState();
+        }
+        GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
+        GlStateManager.enableTexture2D();
+    }
+
+    private int getAdjustColor(long now, float y, Module module) {
+        switch (this.adjustColor.getValue()) {
+            case 1:
+                return Color.HSBtoRGB(((now % 5000L) + (5000.0F - y * 30.0F)) / 5000.0F, 0.45F, 0.8F) | 0xFF000000;
+            case 2:
+                return Color.HSBtoRGB(Math.abs((((now - (int) (y * 50.0F)) % 8000L) / 4000.0F) - 1.0F) * 0.5F + 0.5F, 0.45F, 0.8F) | 0xFF000000;
+            case 3:
+                return module.hashCode() | 0xFF000000;
+            default:
+                if (this.colorMode.getValue() == 0) {
+                    return Color.HSBtoRGB(((now % 5000L) + (5000.0F - y * 30.0F)) / 5000.0F, 0.45F, 0.8F) | 0xFF000000;
+                }
+                Color primary = new Color(this.custom1.getValue() & 0xFFFFFF);
+                Color secondary = new Color(this.custom2.getValue() & 0xFFFFFF);
+                float t = ((float) Math.cos(now * -0.003D + y * 0.075D) + 1.0F) * 0.5F;
+                return new Color(
+                        (int) (primary.getRed() * t + secondary.getRed() * (1.0F - t)),
+                        (int) (primary.getGreen() * t + secondary.getGreen() * (1.0F - t)),
+                        (int) (primary.getBlue() * t + secondary.getBlue() * (1.0F - t))).getRGB();
+        }
+    }
+
+    private static float easeOutExpo(float fraction) {
+        if (fraction <= 0.0F) return 0.0F;
+        if (fraction >= 1.0F) return 1.0F;
+        return 1.0F - (float) Math.pow(2.0D, -10.0D * fraction);
+    }
+
     /**
      * Jello array list: every module sits in its own small dark rounded box; names use the HUD theme colour
      * (wave modes included) and suffixes a soft grey. Boxes slide in/out from the screen edge.
@@ -605,6 +753,7 @@ public class HUD extends Module {
     }
 
     private void updateAnimations(float delta) {
+        long now = System.currentTimeMillis();
         for (Module module : this.activeModules) {
             this.anims.computeIfAbsent(module, m -> new Anim());
         }
@@ -615,10 +764,19 @@ public class HUD extends Module {
             boolean visible = this.activeModules.contains(entry.getKey());
             if (!this.animations.getValue()) {
                 anim.progress = visible ? 1.0F : 0.0F;
+                anim.adjustVisible = visible;
+            } else if (this.arraylistStyle.getValue() == 2) {
+                if (anim.adjustVisible != visible || anim.adjustStarted == 0L) {
+                    anim.adjustStartProgress = anim.progress;
+                    anim.adjustStarted = now;
+                    anim.adjustVisible = visible;
+                }
+                float eased = easeOutExpo((now - anim.adjustStarted) / 600.0F);
+                anim.progress = anim.adjustStartProgress + ((visible ? 1.0F : 0.0F) - anim.adjustStartProgress) * eased;
             } else {
                 anim.progress = this.approach(anim.progress, visible ? 1.0F : 0.0F, delta);
             }
-            if (!visible && anim.progress <= 0.005F) {
+            if (!visible && (this.arraylistStyle.getValue() == 2 ? now - anim.adjustStarted >= 600L : anim.progress <= 0.005F)) {
                 it.remove();
             }
         }
